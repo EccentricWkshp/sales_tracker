@@ -1,13 +1,15 @@
 # app.py
 import click
 from datetime import datetime
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask.cli import with_appcontext
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import joinedload
 
 app = Flask(__name__)
 
@@ -125,44 +127,51 @@ def customers():
     customers = Customer.query.all()
     return render_template('customers.html', customers=customers)
 
-@app.route('/customers/add', methods=['GET', 'POST'])
+@app.route('/customers/add', methods=['POST'])
 @login_required
 def add_customer():
-    if request.method == 'POST':
-        name = request.form['name']
-        email = request.form['email']
-        billing_address = request.form['billing_address']
-        shipping_address = request.form['shipping_address']
-        
-        new_customer = Customer(name=name, email=email, billing_address=billing_address, shipping_address=shipping_address)
-        db.session.add(new_customer)
-        db.session.commit()
-        flash('Customer added successfully')
-        return redirect(url_for('customers'))
-    return render_template('add_customer.html')
+    data = request.json
+    new_customer = Customer(
+        name=data['name'],
+        email=data['email'],
+        billing_address=data['billing_address'],
+        shipping_address=data['shipping_address']
+    )
+    db.session.add(new_customer)
+    db.session.commit()
+    return jsonify({'success': True, 'id': new_customer.id})
 
-@app.route('/customers/edit/<int:id>', methods=['GET', 'POST'])
+@app.route('/customers/edit/<int:id>', methods=['POST'])
 @login_required
 def edit_customer(id):
     customer = Customer.query.get_or_404(id)
-    if request.method == 'POST':
-        customer.name = request.form['name']
-        customer.email = request.form['email']
-        customer.billing_address = request.form['billing_address']
-        customer.shipping_address = request.form['shipping_address']
-        db.session.commit()
-        flash('Customer updated successfully')
-        return redirect(url_for('customers'))
-    return render_template('edit_customer.html', customer=customer)
+    data = request.json
+    customer.name = data['name']
+    customer.email = data['email']
+    customer.billing_address = data['billing_address']
+    customer.shipping_address = data['shipping_address']
+    db.session.commit()
+    return jsonify({'success': True})
 
-@app.route('/customers/delete/<int:id>')
+@app.route('/customers/get/<int:id>')
+@login_required
+def get_customer(id):
+    customer = Customer.query.get_or_404(id)
+    return jsonify({
+        'id': customer.id,
+        'name': customer.name,
+        'email': customer.email,
+        'billing_address': customer.billing_address,
+        'shipping_address': customer.shipping_address
+    })
+
+@app.route('/customers/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_customer(id):
     customer = Customer.query.get_or_404(id)
     db.session.delete(customer)
     db.session.commit()
-    flash('Customer deleted successfully')
-    return redirect(url_for('customers'))
+    return jsonify({'success': True})
 
 @app.route('/products')
 @login_required
@@ -170,98 +179,152 @@ def products():
     products = Product.query.all()
     return render_template('products.html', products=products)
 
-@app.route('/products/add', methods=['GET', 'POST'])
+@app.route('/products/add', methods=['POST'])
 @login_required
 def add_product():
-    if request.method == 'POST':
-        sku = request.form['sku']
-        description = request.form['description']
-        price = float(request.form['price'])
-        
-        new_product = Product(sku=sku, description=description, price=price)
-        db.session.add(new_product)
-        db.session.commit()
-        flash('Product added successfully', 'success')
-        return redirect(url_for('products'))
-    return render_template('add_product.html')
+    data = request.json
+    new_product = Product(
+        sku=data['sku'],
+        description=data['description'],
+        price=float(data['price'])  # The price is now a string without the $ sign
+    )
+    db.session.add(new_product)
+    db.session.commit()
+    return jsonify({'success': True, 'id': new_product.id})
 
-@app.route('/products/edit/<int:id>', methods=['GET', 'POST'])
+@app.route('/products/edit/<int:id>', methods=['POST'])
 @login_required
 def edit_product(id):
     product = Product.query.get_or_404(id)
-    if request.method == 'POST':
-        product.sku = request.form['sku']
-        product.description = request.form['description']
-        product.price = float(request.form['price'])
-        db.session.commit()
-        flash('Product updated successfully', 'success')
-        return redirect(url_for('products'))
-    return render_template('edit_product.html', product=product)
+    data = request.json
+    product.sku = data['sku']
+    product.description = data['description']
+    product.price = float(data['price'])  # The price is now a string without the $ sign
+    db.session.commit()
+    return jsonify({'success': True})
 
-@app.route('/products/delete/<int:id>')
+@app.route('/products/get/<int:id>')
+@login_required
+def get_product(id):
+    product = Product.query.get_or_404(id)
+    return jsonify({
+        'id': product.id,
+        'sku': product.sku,
+        'description': product.description,
+        'price': float(product.price)  # Send the price as a float
+    })
+
+@app.route('/products/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_product(id):
     product = Product.query.get_or_404(id)
     db.session.delete(product)
     db.session.commit()
-    flash('Product deleted successfully', 'success')
-    return redirect(url_for('products'))
+    return jsonify({'success': True})
 
 @app.route('/sales')
 @login_required
 def sales():
-    receipts = SalesReceipt.query.all()
-    return render_template('sales.html', receipts=receipts)
-
-@app.route('/sales/add', methods=['GET', 'POST'])
-@login_required
-def add_sale():
-    if request.method == 'POST':
-        customer_id = request.form['customer_id']
-        total = float(request.form['total'])
-        tax = float(request.form['tax'])
-        shipping = float(request.form['shipping'])
-        
-        new_receipt = SalesReceipt(customer_id=customer_id, total=total, tax=tax, shipping=shipping)
-        db.session.add(new_receipt)
-        db.session.commit()
-        
-        # Add line items
-        line_items = json.loads(request.form['line_items'])
-        for item in line_items:
-            new_line_item = LineItem(
-                receipt_id=new_receipt.id,
-                product_id=item['product_id'],
-                quantity=item['quantity'],
-                price_each=item['price_each'],
-                total_price=item['total_price']
-            )
-            db.session.add(new_line_item)
-        
-        db.session.commit()
-        flash('Sales receipt added successfully', 'success')
-        return redirect(url_for('sales'))
-    
+    sales = SalesReceipt.query.all()
     customers = Customer.query.all()
     products = Product.query.all()
-    return render_template('add_sale.html', customers=customers, products=products)
+    return render_template('sales.html', sales=sales, customers=customers, products=products)
+
+@app.route('/sales/add', methods=['POST'])
+@login_required
+def add_sale():
+    data = request.json
+    new_sale = SalesReceipt(
+        customer_id=data['customer_id'],
+        date=datetime.utcnow(),
+        total=float(data['total']),
+        tax=float(data['tax']),
+        shipping=float(data['shipping'])
+    )
+    db.session.add(new_sale)
+    db.session.flush()  # This assigns an ID to new_sale
+
+    for item in data['line_items']:
+        line_item = LineItem(
+            receipt_id=new_sale.id,
+            product_id=item['product_id'],
+            quantity=int(item['quantity']),
+            price_each=float(item['price_each']),
+            total_price=float(item['total_price'])
+        )
+        db.session.add(line_item)
+
+    db.session.commit()
+    return jsonify({'success': True, 'id': new_sale.id})
+
+@app.route('/sales/get/<int:id>')
+@login_required
+def get_sale(id):
+    sale = SalesReceipt.query.options(joinedload(SalesReceipt.customer), joinedload(SalesReceipt.line_items)).get_or_404(id)
+    return jsonify({
+        'id': sale.id,
+        'customer_id': sale.customer_id,
+        'customer_name': sale.customer.name,
+        'date': sale.date.strftime('%Y-%m-%d %H:%M:%S'),
+        'subtotal': float(sale.total - sale.tax - sale.shipping),
+        'tax': float(sale.tax),
+        'shipping': float(sale.shipping),
+        'total': float(sale.total),
+        'line_items': [{
+            'product_id': item.product_id,
+            'quantity': item.quantity,
+            'price_each': float(item.price_each),
+            'total_price': float(item.total_price)
+        } for item in sale.line_items]
+    })
+
+@app.route('/sales/edit/<int:id>', methods=['POST'])
+@login_required
+def edit_sale(id):
+    sale = SalesReceipt.query.get_or_404(id)
+    data = request.json
+
+    sale.customer_id = data['customer_id']
+    sale.total = float(data['total'])
+    sale.tax = float(data['tax'])
+    sale.shipping = float(data['shipping'])
+
+    # Delete existing line items
+    LineItem.query.filter_by(receipt_id=id).delete()
+
+    # Add new line items
+    for item in data['line_items']:
+        line_item = LineItem(
+            receipt_id=sale.id,
+            product_id=item['product_id'],
+            quantity=int(item['quantity']),
+            price_each=float(item['price_each']),
+            total_price=float(item['total_price'])
+        )
+        db.session.add(line_item)
+
+    db.session.commit()
+    return jsonify({'success': True})
 
 @app.route('/sales/view/<int:id>')
 @login_required
 def view_sale(id):
-    receipt = SalesReceipt.query.get_or_404(id)
+    sale = SalesReceipt.query.get_or_404(id)
     line_items = LineItem.query.filter_by(receipt_id=id).all()
-    return render_template('view_sale.html', receipt=receipt, line_items=line_items)
+    return render_template('view_sale.html', sale=sale, line_items=line_items)
 
-@app.route('/sales/delete/<int:id>')
+@app.route('/sales/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_sale(id):
-    receipt = SalesReceipt.query.get_or_404(id)
+    sale = SalesReceipt.query.get_or_404(id)
+    
+    # Delete associated line items
     LineItem.query.filter_by(receipt_id=id).delete()
-    db.session.delete(receipt)
+    
+    # Delete the sale
+    db.session.delete(sale)
     db.session.commit()
-    flash('Sales receipt deleted successfully', 'success')
-    return redirect(url_for('sales'))
+    return jsonify({'success': True})
 
 @app.route('/api/calculate_tax', methods=['POST'])
 @login_required
@@ -271,16 +334,23 @@ def calculate_tax():
     tax = total * 0.015
     return jsonify({'tax': round(tax, 2)})
 
-@app.route('/api/get_product/<int:id>')
-@login_required
-def get_product(id):
-    product = Product.query.get_or_404(id)
-    return jsonify({
-        'id': product.id,
-        'sku': product.sku,
-        'description': product.description,
-        'price': product.price
-    })
+@click.command('create-admin')
+@with_appcontext
+@click.option('--username', prompt=True)
+@click.option('--password', prompt=True, hide_input=True, confirmation_prompt=True)
+def create_admin(username, password):
+    db.create_all()
+    user = User.query.filter_by(username=username).first()
+    if user:
+        click.echo(f"User {username} already exists.")
+    else:
+        new_user = User(username=username)
+        new_user.set_password(password)
+        db.session.add(new_user)
+        db.session.commit()
+        click.echo(f"Admin user {username} created successfully.")
+
+app.cli.add_command(create_admin)
 
 if __name__ == '__main__':
     with app.app_context():

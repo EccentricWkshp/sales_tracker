@@ -1,69 +1,49 @@
 <!-- templates/index.html -->
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sales Dashboard</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-</head>
-<body>
-    <div class="container">
-        <header>
-            <h1>Sales Dashboard</h1>
-            <nav>
-                <ul>
-                    <li><a href="{{ url_for('customers') }}"><i class="fas fa-users"></i> Customers</a></li>
-                    <li><a href="{{ url_for('products') }}"><i class="fas fa-box"></i> Products</a></li>
-                    <li><a href="{{ url_for('sales') }}"><i class="fas fa-file-invoice-dollar"></i> Sales</a></li>
-                    <li><a href="{{ url_for('logout') }}"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
-                </ul>
-            </nav>
-        </header>
+{% extends "base.html" %}
 
-        <main>
-            <section class="summary">
-                <div class="card">
-                    <h2>Total Revenue</h2>
-                    <p class="large-number">${{ "%.2f"|format(total_revenue) }}</p>
-                </div>
-                <div class="card">
-                    <h2>Total Sales</h2>
-                    <p class="large-number">{{ total_sales }}</p>
-                </div>
-                <div class="card">
-                    <h2>Total Customers</h2>
-                    <p class="large-number">{{ total_customers }}</p>
-                </div>
-            </section>
+{% block title %}Dashboard{% endblock %}
 
-            <section class="recent-sales">
-                <h2>Recent Sales</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Date</th>
-                            <th>Customer</th>
-                            <th>Total</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for sale in recent_sales %}
-                        <tr>
-                            <td>{{ sale.date.strftime('%Y-%m-%d %H:%M') }}</td>
-                            <td>{{ sale.customer.name }}</td>
-                            <td>${{ "%.2f"|format(sale.total) }}</td>
-                            <td>
-                                <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn"><i class="fas fa-eye"></i> View</a>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </section>
-        </main>
+{% block header %}Sales Dashboard{% endblock %}
+
+{% block content %}
+<section class="summary">
+    <div class="card">
+        <h2>Total Revenue</h2>
+        <p class="large-number">${{ "%.2f"|format(total_revenue) }}</p>
     </div>
-</body>
-</html>
+    <div class="card">
+        <h2>Total Sales</h2>
+        <p class="large-number">{{ total_sales }}</p>
+    </div>
+    <div class="card">
+        <h2>Total Customers</h2>
+        <p class="large-number">{{ total_customers }}</p>
+    </div>
+</section>
+
+<section class="recent-sales">
+    <h2>Recent Sales</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Customer</th>
+                <th>Total</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sale in recent_sales %}
+            <tr>
+                <td>{{ sale.date.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>{{ sale.customer.name }}</td>
+                <td>${{ "%.2f"|format(sale.total) }}</td>
+                <td>
+                    <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn"><i class="fas fa-eye"></i> View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}
