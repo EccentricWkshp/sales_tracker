@@ -1,0 +1,153 @@
+<!-- templates/add_sale.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Sale</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Add Sale</h1>
+        <form id="saleForm" method="POST">
+            <div class="form-group">
+                <label for="customer_id">Customer</label>
+                <select id="customer_id" name="customer_id" required>
+                    {% for customer in customers %}
+                        <option value="{{ customer.id }}">{{ customer.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div id="lineItems">
+                <!-- Line items will be added here dynamically -->
+            </div>
+            <button type="button" id="addLineItem" class="btn"><i class="fas fa-plus"></i> Add Line Item</button>
+            <div class="form-group">
+                <label for="subtotal">Subtotal</label>
+                <input type="number" id="subtotal" name="subtotal" step="0.01" min="0" readonly>
+            </div>
+            <div class="form-group">
+                <label for="tax">Tax</label>
+                <input type="number" id="tax" name="tax" step="0.01" min="0" readonly>
+            </div>
+            <div class="form-group">
+                <label for="shipping">Shipping</label>
+                <input type="number" id="shipping" name="shipping" step="0.01" min="0" required>
+            </div>
+            <div class="form-group">
+                <label for="total">Total</label>
+                <input type="number" id="total" name="total" step="0.01" min="0" readonly>
+            </div>
+            <input type="hidden" id="line_items" name="line_items">
+            <button type="submit" class="btn"><i class="fas fa-save"></i> Save Sale</button>
+        </form>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            let lineItemCount = 0;
+
+            $('#addLineItem').click(function() {
+                lineItemCount++;
+                const lineItem = `
+                    <div class="line-item">
+                        <h3>Line Item ${lineItemCount}</h3>
+                        <div class="form-group">
+                            <label for="product_id_${lineItemCount}">Product</label>
+                            <select id="product_id_${lineItemCount}" class="product-select" required>
+                                <option value="">Select a product</option>
+                                {% for product in products %}
+                                    <option value="{{ product.id }}">{{ product.sku }} - {{ product.description }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="quantity_${lineItemCount}">Quantity</label>
+                            <input type="number" id="quantity_${lineItemCount}" class="quantity" min="1" value="1" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="price_each_${lineItemCount}">Price Each</label>
+                            <input type="number" id="price_each_${lineItemCount}" class="price-each" step="0.01" min="0" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label for="total_price_${lineItemCount}">Total Price</label>
+                            <input type="number" id="total_price_${lineItemCount}" class="total-price" step="0.01" min="0" readonly>
+                        </div>
+                    </div>
+                `;
+                $('#lineItems').append(lineItem);
+            });
+
+            $(document).on('change', '.product-select', function() {
+                const productId = $(this).val();
+                const lineItem = $(this).closest('.line-item');
+                if (productId) {
+                    $.get(`/api/get_product/${productId}`, function(data) {
+                        lineItem.find('.price-each').val(data.price);
+                        updateLineTotals(lineItem);
+                    });
+                } else {
+                    lineItem.find('.price-each').val('');
+                    lineItem.find('.total-price').val('');
+                }
+            });
+
+            $(document).on('input', '.quantity', function() {
+                updateLineTotals($(this).closest('.line-item'));
+            });
+
+            $('#shipping').on('input', function() {
+                updateTotals();
+            });
+
+            function updateLineTotals(lineItem) {
+                const quantity = parseFloat(lineItem.find('.quantity').val()) || 0;
+                const priceEach = parseFloat(lineItem.find('.price-each').val()) || 0;
+                const totalPrice = quantity * priceEach;
+                lineItem.find('.total-price').val(totalPrice.toFixed(2));
+                updateTotals();
+            }
+
+            function updateTotals() {
+                let subtotal = 0;
+                $('.total-price').each(function() {
+                    subtotal += parseFloat($(this).val()) || 0;
+                });
+                $('#subtotal').val(subtotal.toFixed(2));
+
+                const shipping = parseFloat($('#shipping').val()) || 0;
+
+                $.ajax({
+                    url: '/api/calculate_tax',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ total: subtotal }),
+                    success: function(data) {
+                        const tax = data.tax;
+                        $('#tax').val(tax.toFixed(2));
+                        const total = subtotal + tax + shipping;
+                        $('#total').val(total.toFixed(2));
+                    }
+                });
+            }
+
+            $('#saleForm').submit(function(e) {
+                e.preventDefault();
+                const lineItems = [];
+                $('.line-item').each(function() {
+                    lineItems.push({
+                        product_id: $(this).find('.product-select').val(),
+                        quantity: $(this).find('.quantity').val(),
+                        price_each: $(this).find('.price-each').val(),
+                        total_price: $(this).find('.total-price').val()
+                    });
+                });
+                $('#line_items').val(JSON.stringify(lineItems));
+                this.submit();
+            });
+        });
+    </script>
+</body>
+</html>
