@@ -1,6 +1,7 @@
 # app.py
 import click
 from datetime import datetime
+from decimal import Decimal
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask.cli import with_appcontext
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -10,6 +11,7 @@ import os
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
+import logging
 
 app = Flask(__name__)
 
@@ -61,6 +63,7 @@ class Customer(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     billing_address = db.Column(db.String(200), nullable=False)
     shipping_address = db.Column(db.String(200), nullable=False)
+    sales = db.relationship('SalesReceipt', backref='customer', lazy=True)
 
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -71,10 +74,11 @@ class Product(db.Model):
 class SalesReceipt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
-    date = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    date = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp())
     total = db.Column(db.Float, nullable=False)
     tax = db.Column(db.Float, nullable=False)
     shipping = db.Column(db.Float, nullable=False)
+    line_items = db.relationship('LineItem', backref='sales_receipt', lazy=True)
 
 class LineItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -83,6 +87,11 @@ class LineItem(db.Model):
     quantity = db.Column(db.Integer, nullable=False)
     price_each = db.Column(db.Float, nullable=False)
     total_price = db.Column(db.Float, nullable=False)
+    product = db.relationship('Product')
+
+@app.template_filter('nl2br')
+def nl2br(value):
+    return value.replace('\n', '<br>\n')
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -111,8 +120,10 @@ def login():
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
             login_user(user)
+            flash('Logged in successfully.', 'success')
             return redirect(url_for('index'))
-        flash('Invalid username or password')
+        else:
+            flash('Invalid username or password', 'error')
     return render_template('login.html')
 
 @app.route('/logout')
@@ -225,7 +236,7 @@ def delete_product(id):
 @app.route('/sales')
 @login_required
 def sales():
-    sales = SalesReceipt.query.all()
+    sales = SalesReceipt.query.options(joinedload(SalesReceipt.customer)).all()
     customers = Customer.query.all()
     products = Product.query.all()
     return render_template('sales.html', sales=sales, customers=customers, products=products)
@@ -278,40 +289,71 @@ def get_sale(id):
         } for item in sale.line_items]
     })
 
-@app.route('/sales/edit/<int:id>', methods=['POST'])
+@app.route('/sales/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
 def edit_sale(id):
-    sale = SalesReceipt.query.get_or_404(id)
-    data = request.json
+    sale = SalesReceipt.query.options(
+        joinedload(SalesReceipt.customer),
+        joinedload(SalesReceipt.line_items).joinedload(LineItem.product)
+    ).get_or_404(id)
+    
+    if request.method == 'POST':
+        try:
+            app.logger.info(f"Received POST request to edit sale {id}")
+            app.logger.debug(f"Form data: {request.form}")
 
-    sale.customer_id = data['customer_id']
-    sale.total = float(data['total'])
-    sale.tax = float(data['tax'])
-    sale.shipping = float(data['shipping'])
+            # Update sale details
+            sale.customer_id = int(request.form['customer_id'])
+            sale.date = datetime.strptime(request.form['date'], '%Y-%m-%dT%H:%M')
+            sale.shipping = Decimal(request.form['shipping'])
+            sale.tax = Decimal(request.form['tax'])
 
-    # Delete existing line items
-    LineItem.query.filter_by(receipt_id=id).delete()
+            # Handle line items
+            # First, remove all existing line items
+            for item in sale.line_items:
+                db.session.delete(item)
+            
+            # Now add new line items
+            for i, product_id in enumerate(request.form.getlist('product_id[]')):
+                quantity = int(request.form.getlist('quantity[]')[i])
+                price_each = Decimal(request.form.getlist('price_each[]')[i])
+                total_price = quantity * price_each
+                
+                new_line_item = LineItem(
+                    receipt_id=sale.id,  # Explicitly set the receipt_id
+                    product_id=int(product_id),
+                    quantity=quantity,
+                    price_each=price_each,
+                    total_price=total_price
+                )
+                db.session.add(new_line_item)
 
-    # Add new line items
-    for item in data['line_items']:
-        line_item = LineItem(
-            receipt_id=sale.id,
-            product_id=item['product_id'],
-            quantity=int(item['quantity']),
-            price_each=float(item['price_each']),
-            total_price=float(item['total_price'])
-        )
-        db.session.add(line_item)
+            # Recalculate total
+            sale.total = Decimal(request.form['total'])
 
-    db.session.commit()
-    return jsonify({'success': True})
+            app.logger.info(f"Attempting to commit changes for sale {id}")
+            db.session.commit()
+            app.logger.info(f"Successfully updated sale {id}")
+            flash('Sale updated successfully', 'success')
+            return redirect(url_for('view_sale', id=sale.id))
+        except Exception as e:
+            db.session.rollback()
+            app.logger.error(f"Error updating sale {id}: {str(e)}")
+            flash(f'Error updating sale: {str(e)}', 'error')
+
+    # For GET requests, render the edit form
+    customers = Customer.query.all()
+    products = Product.query.all()
+    return render_template('edit_sale.html', sale=sale, customers=customers, products=products)
 
 @app.route('/sales/view/<int:id>')
 @login_required
 def view_sale(id):
-    sale = SalesReceipt.query.get_or_404(id)
-    line_items = LineItem.query.filter_by(receipt_id=id).all()
-    return render_template('view_sale.html', sale=sale, line_items=line_items)
+    sale = SalesReceipt.query.options(
+        joinedload(SalesReceipt.customer),
+        joinedload(SalesReceipt.line_items).joinedload(LineItem.product)
+    ).get_or_404(id)
+    return render_template('view_sale.html', sale=sale)
 
 @app.route('/sales/delete/<int:id>', methods=['POST'])
 @login_required
@@ -333,6 +375,17 @@ def calculate_tax():
     # Assuming a flat 1.5% B&O tax rate for this example
     tax = total * 0.015
     return jsonify({'tax': round(tax, 2)})
+
+@app.route('/api/product/<int:id>')
+@login_required
+def get_product_api(id):
+    product = Product.query.get_or_404(id)
+    return jsonify({
+        'id': product.id,
+        'sku': product.sku,
+        'description': product.description,
+        'price': float(product.price)
+    })
 
 @click.command('create-admin')
 @with_appcontext

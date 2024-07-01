@@ -3,9 +3,8 @@
 
 {% block title %}Sales{% endblock %}
 
-{% block header %}Sales{% endblock %}
-
 {% block content %}
+<h1>Sales</h1>
 <button id="addSaleBtn" class="btn"><i class="fas fa-plus"></i> Add Sale</button>
 <table>
     <thead>
@@ -22,7 +21,7 @@
         {% for sale in sales %}
         <tr>
             <td>{{ sale.date.strftime('%Y-%m-%d %H:%M') }}</td>
-            <td>{{ sale.customer.name }}</td>
+            <td>{{ sale.customer.name if sale.customer else 'N/A' }}</td>
             <td>${{ "%.2f"|format(sale.total) }}</td>
             <td>${{ "%.2f"|format(sale.tax) }}</td>
             <td>${{ "%.2f"|format(sale.shipping) }}</td>
@@ -47,6 +46,7 @@
             <div class="form-group">
                 <label for="customer">Customer</label>
                 <select id="customer" name="customer_id" required>
+                    <option value="">Select a customer</option>
                     {% for customer in customers %}
                         <option value="{{ customer.id }}">{{ customer.name }}</option>
                     {% endfor %}
@@ -55,22 +55,24 @@
             <div id="lineItems">
                 <!-- Line items will be added here dynamically -->
             </div>
-            <button type="button" id="addLineItem" class="btn"><i class="fas fa-plus"></i> Add Line Item</button>
-            <div class="form-group">
-                <label for="subtotal">Subtotal</label>
-                <input type="number" id="subtotal" name="subtotal" step="0.01" min="0" readonly>
-            </div>
-            <div class="form-group">
-                <label for="tax">Tax</label>
-                <input type="number" id="tax" name="tax" step="0.01" min="0" readonly>
-            </div>
-            <div class="form-group">
-                <label for="shipping">Shipping</label>
-                <input type="number" id="shipping" name="shipping" step="0.01" min="0" required>
-            </div>
-            <div class="form-group">
-                <label for="total">Total</label>
-                <input type="number" id="total" name="total" step="0.01" min="0" readonly>
+            <button type="button" id="addLineItem" class="btn"><i class="fas fa-plus"></i> Add Product</button>
+            <div class="summary">
+                <div class="form-group">
+                    <label for="subtotal">Subtotal</label>
+                    <input type="text" id="subtotal" name="subtotal" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="tax">Tax</label>
+                    <input type="text" id="tax" name="tax" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="shipping">Shipping</label>
+                    <input type="text" id="shipping" name="shipping" required>
+                </div>
+                <div class="form-group">
+                    <label for="total">Total</label>
+                    <input type="text" id="total" name="total" readonly>
+                </div>
             </div>
             <button type="submit" class="btn"><i class="fas fa-save"></i> Save Sale</button>
         </form>
@@ -79,6 +81,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cleave.js/1.6.0/cleave.min.js"></script>
 <script>
 $(document).ready(function() {
     var modal = $("#saleModal");
@@ -87,12 +90,41 @@ $(document).ready(function() {
     var form = $("#saleForm");
     var lineItemCount = 0;
 
+    // Initialize Cleave.js for currency formatting
+    var currencyInputs = {
+        shipping: new Cleave('#shipping', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        }),
+        subtotal: new Cleave('#subtotal', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        }),
+        tax: new Cleave('#tax', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        }),
+        total: new Cleave('#total', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        })
+    };
+
     addBtn.click(function() {
         $("#modalTitle").text("Add Sale");
         form[0].reset();
         $("#saleId").val("");
         $("#lineItems").empty();
         lineItemCount = 0;
+        updateTotals();
         modal.show();
     });
 
@@ -102,7 +134,7 @@ $(document).ready(function() {
         $.get("/sales/get/" + saleId, function(data) {
             $("#saleId").val(data.id);
             $("#customer").val(data.customer_id);
-            $("#shipping").val(data.shipping);
+            currencyInputs.shipping.setRawValue(data.shipping);
             $("#lineItems").empty();
             lineItemCount = 0;
             data.line_items.forEach(function(item) {
@@ -148,13 +180,13 @@ $(document).ready(function() {
         lineItemCount++;
         var lineItem = `
             <div class="line-item">
-                <h3>Line Item ${lineItemCount}</h3>
+                <h3>Product ${lineItemCount}</h3>
                 <div class="form-group">
                     <label for="product_${lineItemCount}">Product</label>
                     <select id="product_${lineItemCount}" class="product-select" required>
                         <option value="">Select a product</option>
                         {% for product in products %}
-                            <option value="{{ product.id }}">{{ product.sku }} - {{ product.description }}</option>
+                            <option value="{{ product.id }}" data-price="{{ product.price }}">{{ product.sku }} - {{ product.description }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -164,15 +196,30 @@ $(document).ready(function() {
                 </div>
                 <div class="form-group">
                     <label for="price_${lineItemCount}">Price</label>
-                    <input type="number" id="price_${lineItemCount}" class="price" step="0.01" min="0" readonly>
+                    <input type="text" id="price_${lineItemCount}" class="price" readonly>
                 </div>
                 <div class="form-group">
                     <label for="total_${lineItemCount}">Total</label>
-                    <input type="number" id="total_${lineItemCount}" class="line-total" step="0.01" min="0" readonly>
+                    <input type="text" id="total_${lineItemCount}" class="line-total" readonly>
                 </div>
+                <button type="button" class="btn remove-line-item"><i class="fas fa-trash"></i> Remove</button>
             </div>
         `;
         $("#lineItems").append(lineItem);
+        
+        // Initialize Cleave.js for the new line item
+        new Cleave(`#price_${lineItemCount}`, {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        });
+        new Cleave(`#total_${lineItemCount}`, {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        });
         
         if (item) {
             $(`#product_${lineItemCount}`).val(item.product_id);
@@ -180,24 +227,24 @@ $(document).ready(function() {
             $(`#price_${lineItemCount}`).val(item.price_each);
             $(`#total_${lineItemCount}`).val(item.total_price);
         }
+        
+        updateLineTotals($(`#lineItems .line-item`).last());
     }
 
     $(document).on('change', '.product-select', function() {
-        var productId = $(this).val();
         var lineItem = $(this).closest('.line-item');
-        if (productId) {
-            $.get("/products/get/" + productId, function(data) {
-                lineItem.find('.price').val(data.price);
-                updateLineTotals(lineItem);
-            });
-        } else {
-            lineItem.find('.price').val('');
-            lineItem.find('.line-total').val('');
-        }
+        var price = $(this).find(':selected').data('price');
+        lineItem.find('.price').val(price);
+        updateLineTotals(lineItem);
     });
 
     $(document).on('input', '.quantity', function() {
         updateLineTotals($(this).closest('.line-item'));
+    });
+
+    $(document).on('click', '.remove-line-item', function() {
+        $(this).closest('.line-item').remove();
+        updateTotals();
     });
 
     $("#shipping").on('input', function() {
@@ -205,8 +252,8 @@ $(document).ready(function() {
     });
 
     function updateLineTotals(lineItem) {
-        var quantity = parseFloat(lineItem.find('.quantity').val()) || 0;
-        var price = parseFloat(lineItem.find('.price').val()) || 0;
+        var quantity = parseInt(lineItem.find('.quantity').val()) || 0;
+        var price = parseFloat(lineItem.find('.price').val().replace('$', '')) || 0;
         var total = quantity * price;
         lineItem.find('.line-total').val(total.toFixed(2));
         updateTotals();
@@ -215,11 +262,11 @@ $(document).ready(function() {
     function updateTotals() {
         var subtotal = 0;
         $('.line-total').each(function() {
-            subtotal += parseFloat($(this).val()) || 0;
+            subtotal += parseFloat($(this).val().replace('$', '')) || 0;
         });
-        $("#subtotal").val(subtotal.toFixed(2));
+        currencyInputs.subtotal.setRawValue(subtotal.toFixed(2));
 
-        var shipping = parseFloat($("#shipping").val()) || 0;
+        var shipping = parseFloat(currencyInputs.shipping.getRawValue()) || 0;
 
         $.ajax({
             url: '/api/calculate_tax',
@@ -228,9 +275,9 @@ $(document).ready(function() {
             data: JSON.stringify({ total: subtotal }),
             success: function(data) {
                 var tax = data.tax;
-                $("#tax").val(tax.toFixed(2));
+                currencyInputs.tax.setRawValue(tax.toFixed(2));
                 var total = subtotal + tax + shipping;
-                $("#total").val(total.toFixed(2));
+                currencyInputs.total.setRawValue(total.toFixed(2));
             }
         });
     }
@@ -243,8 +290,8 @@ $(document).ready(function() {
             lineItems.push({
                 product_id: $(this).find('.product-select').val(),
                 quantity: $(this).find('.quantity').val(),
-                price_each: $(this).find('.price').val(),
-                total_price: $(this).find('.line-total').val()
+                price_each: $(this).find('.price').val().replace('$', ''),
+                total_price: $(this).find('.line-total').val().replace('$', '')
             });
         });
         
@@ -254,10 +301,10 @@ $(document).ready(function() {
             data: JSON.stringify({
                 customer_id: $("#customer").val(),
                 line_items: lineItems,
-                subtotal: $("#subtotal").val(),
-                tax: $("#tax").val(),
-                shipping: $("#shipping").val(),
-                total: $("#total").val()
+                subtotal: currencyInputs.subtotal.getRawValue(),
+                tax: currencyInputs.tax.getRawValue(),
+                shipping: currencyInputs.shipping.getRawValue(),
+                total: currencyInputs.total.getRawValue()
             }),
             contentType: "application/json",
             success: function(response) {

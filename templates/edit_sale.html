@@ -1,0 +1,165 @@
+<!-- templates/edit_sale.html -->
+{% extends "base.html" %}
+
+{% block title %}Edit Sale #{{ sale.id }}{% endblock %}
+
+{% block content %}
+<div class="edit-sale">
+    <h1>Edit Sale #{{ sale.id }}</h1>
+    
+    <form id="editSaleForm" method="POST" action="{{ url_for('edit_sale', id=sale.id) }}">
+        <div class="form-group">
+            <label for="customer">Customer</label>
+            <select id="customer" name="customer_id" required>
+                {% for customer in customers %}
+                    <option value="{{ customer.id }}" {% if customer.id == sale.customer_id %}selected{% endif %}>
+                        {{ customer.name }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="date">Date</label>
+            <input type="datetime-local" id="date" name="date" value="{{ sale.date.strftime('%Y-%m-%dT%H:%M') }}" required>
+        </div>
+        
+        <h2>Line Items</h2>
+        <div id="lineItems">
+            {% for item in sale.line_items %}
+            <div class="line-item">
+                <select name="product_id[]" class="product-select" required>
+                    {% for product in products %}
+                        <option value="{{ product.id }}" {% if product.id == item.product_id %}selected{% endif %}>
+                            {{ product.sku }} - {{ product.description }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <input type="number" name="quantity[]" class="quantity" value="{{ item.quantity }}" min="1" required>
+                <input type="number" name="price_each[]" class="price-each" value="{{ item.price_each }}" step="0.01" min="0" required>
+                <input type="number" class="line-total" value="{{ item.total_price }}" readonly>
+                <button type="button" class="remove-line-item">Remove</button>
+            </div>
+            {% endfor %}
+        </div>
+        <button type="button" id="addLineItem">Add Line Item</button>
+        
+        <div class="form-group">
+            <label for="subtotal">Subtotal</label>
+            <input type="number" id="subtotal" name="subtotal" value="{{ sale.total - sale.tax - sale.shipping }}" step="0.01" min="0" readonly>
+        </div>
+        
+        <div class="form-group">
+            <label for="shipping">Shipping</label>
+            <input type="number" id="shipping" name="shipping" value="{{ sale.shipping }}" step="0.01" min="0" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="tax">Tax</label>
+            <input type="number" id="tax" name="tax" value="{{ sale.tax }}" step="0.01" min="0" required>
+        </div>
+        
+        <div class="form-group">
+            <label for="total">Total</label>
+            <input type="number" id="total" name="total" value="{{ sale.total }}" step="0.01" min="0" readonly>
+        </div>
+        
+        <button type="submit" class="btn">Update Sale</button>
+        <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn">Cancel</a>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script>
+$(document).ready(function() {
+    function updateLineTotals() {
+        let subtotal = 0;
+        $('.line-item').each(function() {
+            const quantity = parseFloat($(this).find('.quantity').val()) || 0;
+            const priceEach = parseFloat($(this).find('.price-each').val()) || 0;
+            const lineTotal = quantity * priceEach;
+            $(this).find('.line-total').val(lineTotal.toFixed(2));
+            subtotal += lineTotal;
+        });
+        $('#subtotal').val(subtotal.toFixed(2));
+        updateTotal();
+    }
+
+    function updateTotal() {
+        const subtotal = parseFloat($('#subtotal').val()) || 0;
+        const shipping = parseFloat($('#shipping').val()) || 0;
+        const tax = parseFloat($('#tax').val()) || 0;
+        const total = subtotal + shipping + tax;
+        $('#total').val(total.toFixed(2));
+    }
+
+    function addLineItem(product = null) {
+        const newItem = `
+            <div class="line-item">
+                <select name="product_id[]" class="product-select" required>
+                    <option value="">Select a product</option>
+                    {% for product in products %}
+                        <option value="{{ product.id }}">{{ product.sku }} - {{ product.description }}</option>
+                    {% endfor %}
+                </select>
+                <input type="number" name="quantity[]" class="quantity" value="1" min="1" required>
+                <input type="number" name="price_each[]" class="price-each" value="0.00" step="0.01" min="0" required>
+                <input type="number" class="line-total" value="0.00" readonly>
+                <button type="button" class="remove-line-item">Remove</button>
+            </div>
+        `;
+        $('#lineItems').append(newItem);
+        if (product) {
+            const $newItem = $('#lineItems').children().last();
+            $newItem.find('.product-select').val(product.id);
+            $newItem.find('.price-each').val(product.price);
+            updateLineTotals();
+        }
+    }
+
+    $('#addLineItem').click(function() {
+        addLineItem();
+    });
+
+    $(document).on('click', '.remove-line-item', function() {
+        $(this).closest('.line-item').remove();
+        updateLineTotals();
+    });
+
+    $(document).on('change', '.product-select', function() {
+        const productId = $(this).val();
+        const $lineItem = $(this).closest('.line-item');
+        if (productId) {
+            $.getJSON(`/api/product/${productId}`, function(data) {
+                $lineItem.find('.price-each').val(data.price);
+                updateLineTotals();
+            });
+        }
+    });
+
+    $(document).on('input', '.quantity, .price-each, #shipping, #tax', updateLineTotals);
+
+    $('#editSaleForm').submit(function(e) {
+        e.preventDefault();
+        if (confirm('Are you sure you want to update this sale?')) {
+            // Ensure all inputs are enabled before submitting
+            $(this).find('input, select').prop('disabled', false);
+            
+            // Ensure line totals are included in the form submission
+            $('.line-total').each(function(index) {
+                $(this).attr('name', 'line_total[]');
+            });
+            
+            // Log form data before submission
+            console.log('Form data:', $(this).serialize());
+            
+            this.submit();
+        }
+    });
+
+    updateLineTotals();
+});
+</script>
+{% endblock %}
