@@ -5,7 +5,7 @@
 
 {% block content %}
 <h1>Sales</h1>
-<button id="addSaleBtn" class="btn"><i class="fas fa-plus"></i> Add Sale</button>
+<button id="addSaleBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Sale</button>
 <table>
     <thead>
         <tr>
@@ -26,9 +26,9 @@
             <td>${{ "%.2f"|format(sale.tax) }}</td>
             <td>${{ "%.2f"|format(sale.shipping) }}</td>
             <td>
-                <button class="btn edit-sale" data-id="{{ sale.id }}"><i class="fas fa-edit"></i> Edit</button>
-                <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn"><i class="fas fa-eye"></i> View</a>
-                <button class="btn delete-sale" data-id="{{ sale.id }}"><i class="fas fa-trash"></i> Delete</button>
+                <a href="{{ url_for('edit_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit</a>
+                <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-eye"></i> View</a>
+                <button class="btn btn-danger delete-sale" data-id="{{ sale.id }}"><i class="fas fa-trash"></i> Delete</button>
             </td>
         </tr>
         {% endfor %}
@@ -55,7 +55,7 @@
             <div id="lineItems">
                 <!-- Line items will be added here dynamically -->
             </div>
-            <button type="button" id="addLineItem" class="btn"><i class="fas fa-plus"></i> Add Product</button>
+            <button type="button" id="addLineItem" class="btn btn-secondary"><i class="fas fa-plus"></i> Add Product</button>
             <div class="summary">
                 <div class="form-group">
                     <label for="subtotal">Subtotal</label>
@@ -74,7 +74,7 @@
                     <input type="text" id="total" name="total" readonly>
                 </div>
             </div>
-            <button type="submit" class="btn"><i class="fas fa-save"></i> Save Sale</button>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Sale</button>
         </form>
     </div>
 </div>
@@ -202,7 +202,7 @@ $(document).ready(function() {
                     <label for="total_${lineItemCount}">Total</label>
                     <input type="text" id="total_${lineItemCount}" class="line-total" readonly>
                 </div>
-                <button type="button" class="btn remove-line-item"><i class="fas fa-trash"></i> Remove</button>
+                <button type="button" class="btn btn-secondary btn-danger remove-line-item"><i class="fas fa-trash"></i> Remove</button>
             </div>
         `;
         $("#lineItems").append(lineItem);

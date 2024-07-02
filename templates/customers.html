@@ -6,7 +6,8 @@
 {% block header %}Customers{% endblock %}
 
 {% block content %}
-<button id="addCustomerBtn" class="btn"><i class="fas fa-plus"></i> Add Customer</button>
+<h1>Customers</h1>
+<button id="addCustomerBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Customer</button>
 <table>
     <thead>
         <tr>
@@ -25,8 +26,8 @@
             <td>{{ customer.billing_address }}</td>
             <td>{{ customer.shipping_address }}</td>
             <td>
-                <button class="btn edit-customer" data-id="{{ customer.id }}"><i class="fas fa-edit"></i> Edit</button>
-                <button class="btn delete-customer" data-id="{{ customer.id }}"><i class="fas fa-trash"></i> Delete</button>
+                <button class="btn btn-primary edit-customer" data-id="{{ customer.id }}"><i class="fas fa-edit"></i> Edit</button>
+                <button class="btn btn-danger delete-customer" data-id="{{ customer.id }}"><i class="fas fa-trash"></i> Delete</button>
             </td>
         </tr>
         {% endfor %}
@@ -57,7 +58,7 @@
                 <label for="shipping_address">Shipping Address</label>
                 <textarea id="shipping_address" name="shipping_address" required></textarea>
             </div>
-            <button type="submit" class="btn"><i class="fas fa-save"></i> Save Customer</button>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Customer</button>
         </form>
     </div>
 </div>

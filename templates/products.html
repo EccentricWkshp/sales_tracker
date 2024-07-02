@@ -6,7 +6,8 @@
 {% block header %}Products{% endblock %}
 
 {% block content %}
-<button id="addProductBtn" class="btn"><i class="fas fa-plus"></i> Add Product</button>
+<h1>Products</h1>
+<button id="addProductBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Product</button>
 <table>
     <thead>
         <tr>
@@ -23,8 +24,8 @@
             <td>{{ product.description }}</td>
             <td>${{ "%.2f"|format(product.price) }}</td>
             <td>
-                <button class="btn edit-product" data-id="{{ product.id }}"><i class="fas fa-edit"></i> Edit</button>
-                <button class="btn delete-product" data-id="{{ product.id }}"><i class="fas fa-trash"></i> Delete</button>
+                <button class="btn btn-primary edit-product" data-id="{{ product.id }}"><i class="fas fa-edit"></i> Edit</button>
+                <button class="btn btn-danger delete-product" data-id="{{ product.id }}"><i class="fas fa-trash"></i> Delete</button>
             </td>
         </tr>
         {% endfor %}
@@ -51,7 +52,7 @@
                 <label for="price">Price</label>
                 <input type="text" id="price" name="price" required>
             </div>
-            <button type="submit" class="btn"><i class="fas fa-save"></i> Save Product</button>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Product</button>
         </form>
     </div>
 </div>

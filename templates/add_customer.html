@@ -6,9 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Add Customer</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
-    <style>
-        /* Add your styles here */
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
     <h1>Add Customer</h1>
@@ -29,7 +27,7 @@
             <label for="shipping_address">Shipping Address</label>
             <textarea id="shipping_address" name="shipping_address" required></textarea>
         </div>
-        <button type="submit" class="btn"><i class="fas fa-save"></i> Save Customer</button>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Customer</button>
     </form>
 </body>
 </html>

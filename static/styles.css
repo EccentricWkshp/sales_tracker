@@ -1,326 +1,8 @@
 /* static/styles.css */
 
-/* General Styles */
-body {
-    font-family: Arial, sans-serif;
-    line-height: 1.6;
-    margin: 0;
-    padding: 0;
-    background-color: #f4f4f4;
-    color: #333;
-}
-
-.container {
-    width: 80%;
-    margin: auto;
-    overflow: hidden;
-    padding: 20px;
-}
-
-h1, h2, h3 {
-    color: #444;
-}
-
-/* Navigation Styles */
-header {
-    background: #333;
-    color: #fff;
-    padding-top: 30px;
-    min-height: 70px;
-    border-bottom: #0779e4 3px solid;
-}
-
-header a {
-    color: #fff;
-    text-decoration: none;
-    text-transform: uppercase;
-    font-size: 16px;
-}
-
-header ul {
-    padding: 0;
-    margin: 0;
-    list-style: none;
-    overflow: hidden;
-}
-
-header li {
-    float: left;
-    display: inline;
-    padding: 0 20px 0 20px;
-}
-
-header #branding {
-    float: left;
-}
-
-header #branding h1 {
-    margin: 0;
-}
-
-header nav {
-    float: right;
-    margin-top: 10px;
-}
-
-header .highlight, header .current a {
-    color: #0779e4;
-    font-weight: bold;
-}
-
-header a:hover {
-    color: #ffffff;
-    font-weight: bold;
-}
-
-/* Button Styles */
-.btn {
-    display: inline-block;
-    padding: 10px 15px;
-    background: #0779e4;
-    color: #ffffff;
-    border: none;
-    cursor: pointer;
-    text-decoration: none;
-    font-size: 15px;
-    margin-right: 5px;
-    transition: background-color 0.3s ease;
-}
-
-.btn:hover {
-    background: #0056b3;
-}
-
-.btn i {
-    margin-right: 5px;
-}
-
-/* Table Styles */
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 20px;
-}
-
-table, th, td {
-    border: 1px solid #ddd;
-}
-
-th, td {
-    text-align: left;
-    padding: 12px;
-}
-
-th {
-    background-color: #f2f2f2;
-    color: #333;
-}
-
-tr:nth-child(even) {
-    background-color: #f9f9f9;
-}
-
-tr:hover {
-    background-color: #f5f5f5;
-}
-
-/* Form Styles */
-.form-group {
-    margin-bottom: 15px;
-}
-
-.form-group label {
-    display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
-}
-
-.form-group input[type="text"],
-.form-group input[type="email"],
-.form-group input[type="number"],
-.form-group input[type="password"],
-.form-group select,
-.form-group textarea {
-    width: 100%;
-    padding: 8px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    box-sizing: border-box;
-}
-
-/* Modal Styles */
-.modal {
-    display: none;
-    position: fixed;
-    z-index: 1;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-    background-color: rgba(0,0,0,0.4);
-}
-
-.modal-content {
-    background-color: #fefefe;
-    margin: 15% auto;
-    padding: 20px;
-    border: 1px solid #888;
-    width: 80%;
-    max-width: 600px;
-    border-radius: 5px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-}
-
-.close {
-    color: #aaa;
-    float: right;
-    font-size: 28px;
-    font-weight: bold;
-    cursor: pointer;
-}
-
-.close:hover,
-.close:focus {
-    color: #000;
-    text-decoration: none;
-    cursor: pointer;
-}
-
-/* Flash Messages */
-.flash-messages {
-    list-style-type: none;
-    padding: 10px;
-    background: #f4f4f4;
-    margin-bottom: 20px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-}
-
-.flash-message {
-    color: #333;
-    margin-bottom: 5px;
-    padding: 8px;
-    border-radius: 4px;
-}
-
-.flash-message.success {
-    background-color: #d4edda;
-    border-color: #c3e6cb;
-    color: #155724;
-}
-
-.flash-message.error {
-    background-color: #f8d7da;
-    border-color: #f5c6cb;
-    color: #721c24;
-}
-
-/* Sales Form Specific Styles */
-.line-item {
-    border: 1px solid #ddd;
-    padding: 15px;
-    margin-bottom: 15px;
-    border-radius: 5px;
-    background-color: #fff;
-}
-
-.line-item h3 {
-    margin-top: 0;
-    color: #0779e4;
-}
-
-.summary {
-    background-color: #f9f9f9;
-    padding: 15px;
-    border-radius: 5px;
-    margin-top: 20px;
-    border: 1px solid #ddd;
-}
-
-.summary .form-group {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.summary input {
-    width: 150px;
-    text-align: right;
-}
-
-#addLineItem {
-    margin-bottom: 20px;
-}
-
-.remove-line-item {
-    background-color: #dc3545;
-    color: white;
-}
-
-.remove-line-item:hover {
-    background-color: #c82333;
-}
-
-/* Responsive Design */
-@media(max-width: 768px) {
-    header #branding,
-    header nav,
-    header nav li {
-        float: none;
-        text-align: center;
-        width: 100%;
-    }
-
-    .container {
-        width: 95%;
-    }
-
-    table, thead, tbody, th, td, tr {
-        display: block;
-    }
-
-    thead tr {
-        position: absolute;
-        top: -9999px;
-        left: -9999px;
-    }
-
-    tr { border: 1px solid #ccc; }
-
-    td {
-        border: none;
-        border-bottom: 1px solid #eee;
-        position: relative;
-        padding-left: 50%;
-    }
-
-    td:before {
-        position: absolute;
-        top: 6px;
-        left: 6px;
-        width: 45%;
-        padding-right: 10px;
-        white-space: nowrap;
-        content: attr(data-column);
-        color: #000;
-        font-weight: bold;
-    }
-
-    .modal-content {
-        width: 95%;
-    }
-}
-
 /* Dashboard Styles */
 .dashboard {
     padding: 20px;
-}
-
-.dashboard h1 {
-    margin-bottom: 30px;
-    color: #333;
-    font-size: 28px;
 }
 
 .summary-cards {
@@ -332,7 +14,7 @@ tr:hover {
 .card {
     background-color: #fff;
     border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     padding: 20px;
     width: 30%;
     text-align: center;
@@ -347,48 +29,8 @@ tr:hover {
 .large-number {
     font-size: 36px;
     font-weight: bold;
-    color: #0779e4;
+    color: #3498db;
     margin: 10px 0;
-}
-
-.recent-sales {
-    background-color: #fff;
-    border-radius: 8px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    padding: 20px;
-}
-
-.recent-sales h2 {
-    margin-top: 0;
-    margin-bottom: 20px;
-    color: #333;
-}
-
-.btn-small {
-    padding: 5px 10px;
-    font-size: 12px;
-}
-
-/* Adjusting existing styles */
-body {
-    background-color: #f0f4f8;
-}
-
-.container {
-    max-width: 1200px;
-    margin: 0 auto;
-}
-
-/* Responsive adjustments */
-@media (max-width: 768px) {
-    .summary-cards {
-        flex-direction: column;
-    }
-    
-    .card {
-        width: 100%;
-        margin-bottom: 20px;
-    }
 }
 
 /* General Styles */
@@ -405,8 +47,13 @@ body {
     width: 80%;
     max-width: 1200px;
     margin: 0 auto;
-    overflow: hidden;
-    padding: 0 20px;
+    padding: 20px;
+}
+
+/* Typography */
+h1, h2, h3 {
+    color: #2c3e50;
+    margin-bottom: 20px;
 }
 
 /* Header Styles */
@@ -465,7 +112,205 @@ nav i {
     margin-right: 5px;
 }
 
-/* Responsive Design for Header */
+/* Button Styles */
+.btn {
+    display: inline-block;
+    padding: 8px 12px;
+    margin: 2px;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.btn-primary {
+    background-color: #3498db;
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: #2980b9;
+}
+
+.btn-secondary {
+    background-color: #95a5a6;
+    color: white;
+}
+
+.btn-secondary:hover {
+    background-color: #7f8c8d;
+}
+
+.btn-danger {
+    background-color: #e74c3c;
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #c0392b;
+}
+
+.btn i {
+    margin-right: 5px;
+}
+
+/* Table Styles */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 20px;
+    background-color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+table, th, td {
+    border: 1px solid #ddd;
+}
+
+th, td {
+    text-align: left;
+    padding: 12px;
+}
+
+th {
+    background-color: #f2f2f2;
+    color: #333;
+    font-weight: bold;
+}
+
+tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+tr:hover {
+    background-color: #f5f5f5;
+}
+
+/* Form Styles */
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.form-group input[type="text"],
+.form-group input[type="email"],
+.form-group input[type="number"],
+.form-group input[type="password"],
+.form-group input[type="datetime-local"],
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+/* Modal Styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.4);
+}
+
+.modal-content {
+    background-color: #fefefe;
+    margin: 15% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 80%;
+    max-width: 600px;
+    border-radius: 5px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.close:hover,
+.close:focus {
+    color: #000;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+/* Edit Sale Styles */
+.edit-sale {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #fff;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+}
+
+.sale-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.sale-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.address-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.billing-address, .shipping-address {
+    width: 48%;
+}
+
+.line-items {
+    margin-bottom: 20px;
+}
+
+.line-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.line-item select, .line-item input {
+    width: 20%;
+    padding: 5px;
+}
+
+.sale-summary {
+    text-align: right;
+}
+
+.actions {
+    margin-top: 20px;
+    text-align: right;
+}
+
+/* Responsive Design */
 @media (max-width: 768px) {
     header .container {
         flex-direction: column;
@@ -480,85 +325,7 @@ nav i {
     nav li {
         margin: 0.5rem 0;
     }
-}
 
-.view-sale {
-    background-color: #fff;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    padding: 20px;
-    margin-top: 20px;
-}
-
-.view-sale h1 {
-    color: #333;
-    border-bottom: 2px solid #eee;
-    padding-bottom: 10px;
-    margin-bottom: 20px;
-}
-
-.view-sale h2 {
-    color: #0779e4;
-    margin-top: 30px;
-    margin-bottom: 15px;
-}
-
-.view-sale h3 {
-    color: #555;
-    margin-bottom: 10px;
-}
-
-.sale-info p, .address-info p {
-    margin: 5px 0;
-}
-
-.address-info {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 30px;
-}
-
-.billing-address, .shipping-address {
-    width: 48%;
-}
-
-.line-items table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 30px;
-}
-
-.line-items th, .line-items td {
-    border: 1px solid #ddd;
-    padding: 10px;
-    text-align: left;
-}
-
-.line-items th {
-    background-color: #f2f2f2;
-    font-weight: bold;
-}
-
-.sale-summary p {
-    margin: 10px 0;
-}
-
-.sale-summary .total {
-    font-size: 1.2em;
-    font-weight: bold;
-    color: #0779e4;
-}
-
-.actions {
-    margin-top: 30px;
-}
-
-.actions .btn {
-    margin-right: 10px;
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
     .address-info {
         flex-direction: column;
     }
@@ -567,94 +334,71 @@ nav i {
         width: 100%;
         margin-bottom: 20px;
     }
+
+    .line-item {
+        flex-wrap: wrap;
+    }
+
+    .line-item select, .line-item input {
+        width: 48%;
+        margin-bottom: 5px;
+    }
 }
 
-.edit-sale {
-    background-color: #fff;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    padding: 20px;
-    margin-top: 20px;
+
+
+
+
+
+
+
+.edit-sale .form-group.compact {
+    display: inline-block;
+    margin-right: 20px;
 }
 
-.edit-sale h1 {
-    color: #333;
-    border-bottom: 2px solid #eee;
-    padding-bottom: 10px;
-    margin-bottom: 20px;
-}
-
-.edit-sale h2 {
-    color: #0779e4;
-    margin-top: 30px;
-    margin-bottom: 15px;
-}
-
-.edit-sale .form-group {
-    margin-bottom: 15px;
-}
-
-.edit-sale label {
-    display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
-}
-
-.edit-sale input[type="text"],
-.edit-sale input[type="number"],
-.edit-sale input[type="datetime-local"],
-.edit-sale select {
-    width: 100%;
-    padding: 8px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    box-sizing: border-box;
-}
-
-.edit-sale .line-item {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 10px;
-    align-items: center;
-}
-
-.edit-sale .line-item select,
-.edit-sale .line-item input {
-    flex: 1;
-}
-
-.edit-sale .line-item .remove-line-item {
-    background-color: #dc3545;
-    color: white;
-    border: none;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.edit-sale #addLineItem {
-    margin-bottom: 20px;
-    background-color: #28a745;
-    color: white;
-    border: none;
-    padding: 10px 15px;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.edit-sale .btn {
+.edit-sale .form-group.compact label {
+    display: inline-block;
     margin-right: 10px;
 }
 
-/* Responsive design */
-@media (max-width: 768px) {
-    .edit-sale .line-item {
-        flex-direction: column;
-        gap: 5px;
-    }
+.edit-sale .form-group.compact input,
+.edit-sale .form-group.compact select {
+    width: auto;
+}
 
-    .edit-sale .line-item select,
-    .edit-sale .line-item input {
-        width: 100%;
-    }
+.edit-sale .address-info {
+    display: flex;
+    justify-content: space-between;
+}
+
+.edit-sale .billing-address,
+.edit-sale .shipping-address {
+    width: 48%;
+}
+
+.edit-sale #lineItemsTable {
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+.edit-sale #lineItemsTable th,
+.edit-sale #lineItemsTable td {
+    padding: 8px;
+    text-align: left;
+}
+
+.edit-sale #lineItemsTable input,
+.edit-sale #lineItemsTable select {
+    width: 100%;
+}
+
+.edit-sale .sale-summary {
+    text-align: right;
+    margin-top: 20px;
+}
+
+.edit-sale .actions {
+    margin-top: 20px;
+    text-align: right;
 }

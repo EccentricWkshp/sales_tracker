@@ -1,77 +1,92 @@
-<!-- templates/edit_sale.html -->
 {% extends "base.html" %}
 
-{% block title %}Edit Sale #{{ sale.id }}{% endblock %}
+{% block title %}Edit Sales Receipt #{{ sale.id }}{% endblock %}
 
 {% block content %}
 <div class="edit-sale">
-    <h1>Edit Sale #{{ sale.id }}</h1>
-    
-    <form id="editSaleForm" method="POST" action="{{ url_for('edit_sale', id=sale.id) }}">
+    <div class="sale-header">
+        <h1>Edit Sales Receipt #{{ sale.id }}</h1>
         <div class="form-group">
-            <label for="customer">Customer</label>
-            <select id="customer" name="customer_id" required>
-                {% for customer in customers %}
-                    <option value="{{ customer.id }}" {% if customer.id == sale.customer_id %}selected{% endif %}>
-                        {{ customer.name }}
-                    </option>
-                {% endfor %}
-            </select>
-        </div>
-        
-        <div class="form-group">
-            <label for="date">Date</label>
+            <label for="date">Date:</label>
             <input type="datetime-local" id="date" name="date" value="{{ sale.date.strftime('%Y-%m-%dT%H:%M') }}" required>
         </div>
-        
-        <h2>Line Items</h2>
-        <div id="lineItems">
-            {% for item in sale.line_items %}
-            <div class="line-item">
-                <select name="product_id[]" class="product-select" required>
-                    {% for product in products %}
-                        <option value="{{ product.id }}" {% if product.id == item.product_id %}selected{% endif %}>
-                            {{ product.sku }} - {{ product.description }}
+    </div>
+    
+    <form id="editSaleForm" method="POST" action="{{ url_for('edit_sale', id=sale.id) }}">
+        <div class="sale-info">
+            <div class="form-group">
+                <label for="customer">Customer:</label>
+                <select id="customer" name="customer_id" required>
+                    {% for customer in customers %}
+                        <option value="{{ customer.id }}" {% if customer.id == sale.customer_id %}selected{% endif %}>
+                            {{ customer.name }}
                         </option>
                     {% endfor %}
                 </select>
-                <input type="number" name="quantity[]" class="quantity" value="{{ item.quantity }}" min="1" required>
-                <input type="number" name="price_each[]" class="price-each" value="{{ item.price_each }}" step="0.01" min="0" required>
-                <input type="number" class="line-total" value="{{ item.total_price }}" readonly>
-                <button type="button" class="remove-line-item">Remove</button>
             </div>
-            {% endfor %}
-        </div>
-        <button type="button" id="addLineItem">Add Line Item</button>
-        
-        <div class="form-group">
-            <label for="subtotal">Subtotal</label>
-            <input type="number" id="subtotal" name="subtotal" value="{{ sale.total - sale.tax - sale.shipping }}" step="0.01" min="0" readonly>
         </div>
         
-        <div class="form-group">
-            <label for="shipping">Shipping</label>
-            <input type="number" id="shipping" name="shipping" value="{{ sale.shipping }}" step="0.01" min="0" required>
+        <div class="address-info">
+            <div class="billing-address">
+                <h3>Billing Address</h3>
+                <textarea id="billing_address" name="billing_address" rows="4" readonly>{{ sale.customer.name + '\n' + sale.customer.billing_address }}</textarea>
+            </div>
+            <div class="shipping-address">
+                <h3>Shipping Address</h3>
+                <textarea id="shipping_address" name="shipping_address" rows="4" readonly>{{ sale.customer.name + '\n' + sale.customer.shipping_address }}</textarea>
+            </div>
         </div>
         
-        <div class="form-group">
-            <label for="tax">Tax</label>
-            <input type="number" id="tax" name="tax" value="{{ sale.tax }}" step="0.01" min="0" required>
+        <div class="line-items">
+            <h2>Line Items</h2>
+            <button type="button" id="addLineItem" class="btn btn-primary"><i class="fas fa-plus"></i> Add Item</button>
+            <div id="lineItems">
+                {% for item in sale.line_items %}
+                <div class="line-item">
+                    <select name="product_id[]" class="product-select" required>
+                        {% for product in products %}
+                            <option value="{{ product.id }}" {% if product.id == item.product_id %}selected{% endif %}>
+                                {{ product.sku }} - {{ product.description }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <input type="number" name="quantity[]" class="quantity" value="{{ item.quantity }}" min="1" required>
+                    <input type="number" name="price_each[]" class="price-each" value="{{ item.price_each }}" step="0.01" min="0" required>
+                    <input type="number" class="line-total" value="{{ item.total_price }}" readonly>
+                    <button type="button" class="btn btn-danger remove-line-item"><i class="fas fa-trash"></i></button>
+                </div>
+                {% endfor %}
+            </div>
         </div>
         
-        <div class="form-group">
-            <label for="total">Total</label>
-            <input type="number" id="total" name="total" value="{{ sale.total }}" step="0.01" min="0" readonly>
+        <div class="sale-summary">
+            <div class="form-group">
+                <label for="subtotal">Subtotal:</label>
+                <input type="number" id="subtotal" name="subtotal" value="{{ sale.total - sale.tax - sale.shipping }}" step="0.01" min="0" readonly>
+            </div>
+            <div class="form-group">
+                <label for="shipping">Shipping:</label>
+                <input type="number" id="shipping" name="shipping" value="{{ sale.shipping }}" step="0.01" min="0" required>
+            </div>
+            <div class="form-group">
+                <label for="tax">Tax:</label>
+                <input type="number" id="tax" name="tax" value="{{ sale.tax }}" step="0.01" min="0" required>
+            </div>
+            <div class="form-group">
+                <label for="total">Total:</label>
+                <input type="number" id="total" name="total" value="{{ sale.total }}" step="0.01" min="0" readonly>
+            </div>
         </div>
         
-        <button type="submit" class="btn">Update Sale</button>
-        <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn">Cancel</a>
+        <div class="actions">
+            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Update Sale</button>
+            <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-times"></i> Cancel</a>
+        </div>
     </form>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script>
 $(document).ready(function() {
     function updateLineTotals() {
@@ -95,7 +110,7 @@ $(document).ready(function() {
         $('#total').val(total.toFixed(2));
     }
 
-    function addLineItem(product = null) {
+    function addLineItem() {
         const newItem = `
             <div class="line-item">
                 <select name="product_id[]" class="product-select" required>
@@ -107,21 +122,14 @@ $(document).ready(function() {
                 <input type="number" name="quantity[]" class="quantity" value="1" min="1" required>
                 <input type="number" name="price_each[]" class="price-each" value="0.00" step="0.01" min="0" required>
                 <input type="number" class="line-total" value="0.00" readonly>
-                <button type="button" class="remove-line-item">Remove</button>
+                <button type="button" class="btn btn-danger remove-line-item"><i class="fas fa-trash"></i></button>
             </div>
         `;
         $('#lineItems').append(newItem);
-        if (product) {
-            const $newItem = $('#lineItems').children().last();
-            $newItem.find('.product-select').val(product.id);
-            $newItem.find('.price-each').val(product.price);
-            updateLineTotals();
-        }
+        updateLineTotals();
     }
 
-    $('#addLineItem').click(function() {
-        addLineItem();
-    });
+    $('#addLineItem').click(addLineItem);
 
     $(document).on('click', '.remove-line-item', function() {
         $(this).closest('.line-item').remove();
@@ -141,20 +149,17 @@ $(document).ready(function() {
 
     $(document).on('input', '.quantity, .price-each, #shipping, #tax', updateLineTotals);
 
+    $('#customer').change(function() {
+        const customerId = $(this).val();
+        $.getJSON(`/api/customer/${customerId}`, function(data) {
+            $('#billing_address').val(data.billing_address);
+            $('#shipping_address').val(data.shipping_address);
+        });
+    });
+
     $('#editSaleForm').submit(function(e) {
         e.preventDefault();
         if (confirm('Are you sure you want to update this sale?')) {
-            // Ensure all inputs are enabled before submitting
-            $(this).find('input, select').prop('disabled', false);
-            
-            // Ensure line totals are included in the form submission
-            $('.line-total').each(function(index) {
-                $(this).attr('name', 'line_total[]');
-            });
-            
-            // Log form data before submission
-            console.log('Form data:', $(this).serialize());
-            
             this.submit();
         }
     });
