@@ -190,8 +190,20 @@ tr:hover {
 }
 
 /* Form Styles */
+.form-container {
+    display: flex;
+    /* justify-content: left; */
+    gap: 10px; /* Adjust the gap between the fields as needed */
+}
+
 .form-group {
+    flex: 1;
+    margin-right: 10px;
     margin-bottom: 15px;
+}
+
+.form-group:last-child {
+    margin-right: 0;
 }
 
 .form-group label {
@@ -343,62 +355,4 @@ tr:hover {
         width: 48%;
         margin-bottom: 5px;
     }
-}
-
-
-
-
-
-
-
-
-.edit-sale .form-group.compact {
-    display: inline-block;
-    margin-right: 20px;
-}
-
-.edit-sale .form-group.compact label {
-    display: inline-block;
-    margin-right: 10px;
-}
-
-.edit-sale .form-group.compact input,
-.edit-sale .form-group.compact select {
-    width: auto;
-}
-
-.edit-sale .address-info {
-    display: flex;
-    justify-content: space-between;
-}
-
-.edit-sale .billing-address,
-.edit-sale .shipping-address {
-    width: 48%;
-}
-
-.edit-sale #lineItemsTable {
-    width: 100%;
-    margin-bottom: 20px;
-}
-
-.edit-sale #lineItemsTable th,
-.edit-sale #lineItemsTable td {
-    padding: 8px;
-    text-align: left;
-}
-
-.edit-sale #lineItemsTable input,
-.edit-sale #lineItemsTable select {
-    width: 100%;
-}
-
-.edit-sale .sale-summary {
-    text-align: right;
-    margin-top: 20px;
-}
-
-.edit-sale .actions {
-    margin-top: 20px;
-    text-align: right;
 }

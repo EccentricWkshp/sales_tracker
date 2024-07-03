@@ -8,7 +8,7 @@
     <h1>Sales Receipt #{{ sale.id }}</h1>
     
     <div class="sale-info">
-        <strong>Date:</strong> {{ sale.date.strftime('%Y-%m-%d %H:%M') }}<br>
+        <strong>Date:</strong> {{ sale.date.strftime('%m-%d-%Y') }}<br>
         <strong>Customer:</strong> {{ sale.customer.name }} ({{ sale.customer.email }})
     </div>
 

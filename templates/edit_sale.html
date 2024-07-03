@@ -6,13 +6,14 @@
 <div class="edit-sale">
     <div class="sale-header">
         <h1>Edit Sales Receipt #{{ sale.id }}</h1>
+
+    </div>
+    
+    <form id="editSaleForm" method="POST" action="{{ url_for('edit_sale', id=sale.id) }}">
         <div class="form-group">
             <label for="date">Date:</label>
             <input type="datetime-local" id="date" name="date" value="{{ sale.date.strftime('%Y-%m-%dT%H:%M') }}" required>
         </div>
-    </div>
-    
-    <form id="editSaleForm" method="POST" action="{{ url_for('edit_sale', id=sale.id) }}">
         <div class="sale-info">
             <div class="form-group">
                 <label for="customer">Customer:</label>

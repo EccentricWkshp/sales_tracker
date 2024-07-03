@@ -1,27 +1,32 @@
 # app.py
 import click
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask.cli import with_appcontext
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
-import os
-from sqlalchemy import func
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import joinedload
 import logging
+from markupsafe import Markup
+import os
+import pytz
+import requests
+from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy.orm import joinedload
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 
 # Use environment variable for secret key, with a fallback for development
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
+app.config['SECRET_KEY'] = 'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
@@ -63,7 +68,9 @@ class Customer(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     billing_address = db.Column(db.String(200), nullable=False)
     shipping_address = db.Column(db.String(200), nullable=False)
+    phone = db.Column(db.String(20))
     sales = db.relationship('SalesReceipt', backref='customer', lazy=True)
+    shipstation_mapping = db.relationship('ShipStationCustomerMapping', uselist=False, back_populates='customer')
 
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -72,12 +79,14 @@ class Product(db.Model):
     price = db.Column(db.Float, nullable=False)
 
 class SalesReceipt(db.Model):
+    shipstation_order_id = db.Column(db.String(50))  # Add the new column here
     id = db.Column(db.Integer, primary_key=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
     date = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp())
     total = db.Column(db.Float, nullable=False)
     tax = db.Column(db.Float, nullable=False)
     shipping = db.Column(db.Float, nullable=False)
+    shipstation_order_id = db.Column(db.String(50), unique=True, nullable=True)
     line_items = db.relationship('LineItem', backref='sales_receipt', lazy=True)
 
 class LineItem(db.Model):
@@ -89,13 +98,24 @@ class LineItem(db.Model):
     total_price = db.Column(db.Float, nullable=False)
     product = db.relationship('Product')
 
+class ShipStationCustomerMapping(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
+    shipstation_customer_id = db.Column(db.String(50), unique=True, nullable=False)
+    customer = db.relationship('Customer', back_populates='shipstation_mapping')
+
+class ShipStationCredentials(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    api_key = db.Column(db.String(100), nullable=False)
+    api_secret = db.Column(db.String(100), nullable=False)
+
 @app.template_filter('nl2br')
 def nl2br(value):
-    return value.replace('\n', '<br>\n')
+    return Markup(value.replace('\n', '<br>\n'))
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
+    return db.session.get(User, int(user_id))
 
 # Routes
 @app.route('/')
@@ -276,7 +296,7 @@ def get_sale(id):
         'id': sale.id,
         'customer_id': sale.customer_id,
         'customer_name': sale.customer.name,
-        'date': sale.date.strftime('%Y-%m-%d %H:%M:%S'),
+        'date': sale.date.strftime('%m-%d-%Y'),
         'subtotal': float(sale.total - sale.tax - sale.shipping),
         'tax': float(sale.tax),
         'shipping': float(sale.shipping),
@@ -314,17 +334,17 @@ def edit_sale(id):
                 db.session.delete(item)
             
             # Now add new line items
-            for i, product_id in enumerate(request.form.getlist('product_id[]')):
-                quantity = int(request.form.getlist('quantity[]')[i])
-                price_each = Decimal(request.form.getlist('price_each[]')[i])
-                total_price = quantity * price_each
-                
+            product_ids = request.form.getlist('product_id[]')
+            quantities = request.form.getlist('quantity[]')
+            prices_each = request.form.getlist('price_each[]')
+            
+            for product_id, quantity, price_each in zip(product_ids, quantities, prices_each):
                 new_line_item = LineItem(
-                    receipt_id=sale.id,  # Explicitly set the receipt_id
+                    receipt_id=sale.id,
                     product_id=int(product_id),
-                    quantity=quantity,
-                    price_each=price_each,
-                    total_price=total_price
+                    quantity=int(quantity),
+                    price_each=Decimal(price_each),
+                    total_price=Decimal(quantity) * Decimal(price_each)
                 )
                 db.session.add(new_line_item)
 
@@ -386,6 +406,245 @@ def get_product_api(id):
         'description': product.description,
         'price': float(product.price)
     })
+
+@app.route('/shipstation/credentials', methods=['GET', 'POST'])
+@login_required
+def shipstation_credentials():
+    if request.method == 'POST':
+        api_key = request.form['api_key']
+        api_secret = request.form['api_secret']
+        
+        credentials = ShipStationCredentials.query.first()
+        if credentials:
+            credentials.api_key = api_key
+            credentials.api_secret = api_secret
+        else:
+            credentials = ShipStationCredentials(api_key=api_key, api_secret=api_secret)
+            db.session.add(credentials)
+        
+        try:
+            db.session.commit()
+            flash('ShipStation credentials updated successfully.', 'success')
+        except IntegrityError:
+            db.session.rollback()
+            flash('Error updating ShipStation credentials.', 'error')
+        
+        return redirect(url_for('shipstation_credentials'))
+    
+    credentials = ShipStationCredentials.query.first()
+    return render_template('shipstation_credentials.html', credentials=credentials)
+
+@app.route('/shipstation/fetch_orders', methods=['POST'])
+@login_required
+def fetch_shipstation_orders():
+    credentials = ShipStationCredentials.query.first()
+    if not credentials:
+        return jsonify({'error': 'ShipStation credentials not found'}), 400
+    
+    start_date = request.form.get('start_date')
+    end_date = request.form.get('end_date')
+    
+    if not start_date or not end_date:
+        return jsonify({'error': 'Start date and end date are required'}), 400
+    
+    api_url = 'https://ssapi.shipstation.com/orders'
+    params = {
+        'orderDateStart': start_date,
+        'orderDateEnd': end_date,
+        'orderStatus': 'shipped'
+    }
+    
+    try:
+        response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
+        response.raise_for_status()
+    except requests.RequestException as e:
+        app.logger.error(f"Error fetching orders from ShipStation: {str(e)}")
+        return jsonify({'error': 'Error fetching orders from ShipStation'}), 500
+    
+    shipstation_orders = response.json()
+    
+    processed_orders = process_shipstation_data(shipstation_orders.get('orders', []))
+    
+    orders_created = 0
+    orders_updated = 0
+    customers_created = 0
+    errors = []
+
+    for order in processed_orders:
+        try:
+            customer = get_or_create_customer(order['customer'])
+            if customer.id is None:
+                customers_created += 1
+
+            existing_sale = SalesReceipt.query.filter_by(id=order['sales_receipt_number']).first()
+            
+            if existing_sale:
+                # Update existing sale
+                existing_sale.customer_id = customer.id
+                existing_sale.date = order['sales_receipt_date']
+                existing_sale.total = order['order_total']
+                existing_sale.tax = order['tax_amount']
+                existing_sale.shipping = order['shipping_amount']
+                orders_updated += 1
+            else:
+                # Create a new sale
+                new_sale = SalesReceipt(
+                    customer_id=customer.id,
+                    date=order['sales_receipt_date'],
+                    total=order['order_total'],
+                    tax=order['tax_amount'],
+                    shipping=order['shipping_amount'],
+                    id=order['sales_receipt_number']
+                )
+                db.session.add(new_sale)
+                orders_created += 1
+            
+            # Process line items
+            sale = existing_sale or new_sale
+            process_line_items(sale, order['items'])
+
+        except Exception as e:
+            db.session.rollback()
+            error_msg = f"Error processing order {order['sales_receipt_number']}: {str(e)}"
+            app.logger.error(error_msg)
+            errors.append(error_msg)
+            continue
+
+    try:
+        db.session.commit()
+        message = (f'Successfully processed {len(processed_orders)} orders from ShipStation. '
+                   f'Created {orders_created} new orders, updated {orders_updated} existing orders, '
+                   f'and added {customers_created} new customers.')
+        if errors:
+            message += f' Encountered {len(errors)} errors.'
+        
+        app.logger.info(message)
+        return jsonify({
+            'message': message,
+            'errors': errors
+        }), 200 if not errors else 207  # Use 207 Multi-Status if there were some errors
+    except IntegrityError as e:
+        db.session.rollback()
+        error_msg = f'Error committing changes to database: {str(e)}'
+        app.logger.error(error_msg)
+        return jsonify({'error': error_msg}), 500
+
+def get_or_create_customer(customer_data):
+    customer = Customer.query.filter_by(email=customer_data['name']).first()
+    if not customer:
+        customer = Customer(
+            name=customer_data['name'],
+            email=customer_data['name'],  # Using name as email as a fallback
+            phone=customer_data['phone'],
+            billing_address=format_address(customer_data),
+            shipping_address=format_address(customer_data)
+        )
+        db.session.add(customer)
+    return customer
+
+def format_address(address_dict):
+    return f"{address_dict['name']}, " \
+           f"{address_dict['street1']}, " \
+           f"{address_dict['street2']}, " \
+           f"{address_dict['street3']}, " \
+           f"{address_dict['city']}, " \
+           f"{address_dict['state']} " \
+           f"{address_dict['postal_code']}, " \
+           f"{address_dict['country']}".replace(', ,', ',').strip(', ')
+
+def process_shipstation_data(shipstation_orders):
+    processed_orders = []
+
+    for order in shipstation_orders:
+        app.logger.error(f"order date: {order['orderDate']}")
+
+        #ship_date = datetime.strptime(order['shipDate'], '%Y-%m-%dT%H:%M:%S.%f')
+
+        #if sales_receipt_date is None or ship_date is None:
+        #    app.logger.error(f"Skipping order {order['orderNumber']} due to invalid date")
+        #    continue
+
+        processed_order = {
+            'sales_receipt_number': order['orderNumber'],
+            'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
+            #'ship_date': parse_shipstation_date(order['shipDate']),
+            'customer': {
+                'name': order['shipTo']['name'],
+                'company': order['shipTo'].get('company', ''),
+                'street1': order['shipTo']['street1'],
+                'street2': order['shipTo'].get('street2', ''),
+                'street3': order['shipTo'].get('street3', ''),
+                'city': order['shipTo']['city'],
+                'state': order['shipTo']['state'],
+                'postal_code': order['shipTo']['postalCode'],
+                'country': order['shipTo']['country'],
+                'phone': order['shipTo']['phone'],
+            },
+            'items': [
+                {
+                    'sku': item['sku'],
+                    'name': item['name'],
+                    'quantity': item['quantity'],
+                    'unit_price': Decimal(str(item['unitPrice'])),
+                    'options': item['options'],
+                } for item in order['items']
+            ],
+            'order_total': Decimal(str(order['orderTotal'])),
+            'amount_paid': Decimal(str(order['amountPaid'])),
+            'tax_amount': Decimal(str(order['taxAmount'])),
+            'shipping_amount': Decimal(str(order['shippingAmount'])),
+        }
+        processed_orders.append(processed_order)
+
+    return processed_orders
+
+def parse_shipstation_date(date_str):
+    # Split the string at the dot to separate the fractional seconds
+    parts = date_str.split('.')
+    
+    # If there is a fractional part, remove trailing zeros from it
+    if len(parts) == 2:
+        parts[1] = parts[1].rstrip('0')
+        # If the fractional part is empty after stripping, set it to '0'
+        fractional_part = parts[1] if parts[1] else '0'
+        # Reassemble the string, ensuring the fractional part has at least one digit
+        cleaned_date_str = parts[0] + '.' + fractional_part
+    else:
+        # If there is no fractional part, add '.0' to match the expected format
+        cleaned_date_str = parts[0] + '.0'
+    
+    # Convert to datetime object and return it
+    return datetime.strptime(cleaned_date_str, '%Y-%m-%dT%H:%M:%S.%f').strftime('%Y-%m-%dT%H:%M:%S.%f')
+
+def process_line_items(sale, shipstation_items):
+    # Remove existing line items if updating an existing sale
+    if sale.line_items:
+        for item in sale.line_items:
+            db.session.delete(item)
+        sale.line_items = []
+
+    for item in shipstation_items:
+        product = get_or_create_product(item)
+        line_item = LineItem(
+            receipt_id=sale.id,
+            product_id=product.id,
+            quantity=int(item['quantity']),
+            price_each=float(item['unit_price']),
+            total_price=float(item['quantity']) * float(item['unit_price'])
+        )
+        sale.line_items.append(line_item)
+
+def get_or_create_product(shipstation_item):
+    product = Product.query.filter_by(sku=shipstation_item['sku']).first()
+    if not product:
+        product = Product(
+            sku=shipstation_item['sku'],
+            description=shipstation_item['name'],
+            price=float(shipstation_item['unit_price'])
+        )
+        db.session.add(product)
+        db.session.flush()  # This assigns an ID to the new product
+    return product
 
 @click.command('create-admin')
 @with_appcontext
