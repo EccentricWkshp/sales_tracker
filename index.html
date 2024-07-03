@@ -52,7 +52,31 @@
         var gridOptions = {
             domLayout: "autoHeight",
             columnDefs: [
-                { headerName: 'Date', field: 'date', sortable: true, sort: 'desc', filter: true, flex: 1 },
+                {
+                    headerName: "Date",
+                    field: "date",
+                    filter: 'agDateColumnFilter',
+                    filterParams: {
+                        comparator: function(filterLocalDateAtMidnight, cellValue) {
+                            var dateParts = cellValue.split('-');
+                            var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
+
+                            if (cellDate < filterLocalDateAtMidnight) {
+                                return -1;
+                            } else if (cellDate > filterLocalDateAtMidnight) {
+                                return 1;
+                            } else {
+                                return 0;
+                            }
+                        },
+                        buttons: ["apply", "reset"],
+                        closeOnApply: true
+                    },
+                    valueFormatter: function(params) {
+                        var dateParts = params.value.split('-');
+                        return `${dateParts[0]}-${dateParts[1]}-${dateParts[2]}`;
+                    }
+                },
                 { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
                 { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
                 {
@@ -79,6 +103,10 @@
                 flex: 1,
                 minWidth: 100,
                 resizable: true,
+                filterParams: {
+                    buttons: ["apply", "reset"],
+                    closeOnApply: true
+                }
             },
         };
         

@@ -57,9 +57,12 @@
                             deleteCustomer(params.data.id);
                         }
                     },
+                    maxWidth: 40,
                     sortable: false,
                     filter: false,
-                    resizable: false
+                    resizable: false,
+                    suppressAutoSize: true,
+                    suppressSizeToFit: true
                 },
                 {
                     headerName: '',
@@ -70,9 +73,12 @@
                     onCellClicked: function(params) {
                         editCustomer(params.data.id);
                     },
+                    maxWidth: 40,
                     sortable: false,
                     filter: false,
-                    resizable: false
+                    resizable: false,
+                    suppressAutoSize: true,
+                    suppressSizeToFit: true
                 },
                 { headerName: 'Name', field: 'name', sortable: true, sort: 'asc', filter: true },
                 { headerName: 'Email', field: 'email', sortable: true, filter: true },
@@ -94,6 +100,10 @@
                 flex: 1,
                 minWidth: 100,
                 resizable: true,
+                filterParams: {
+                    buttons: ["apply", "reset"],
+                    closeOnApply: true
+                }
             },
             onRowClicked: function(params) {
                 if (!params.event.target.classList.contains('delete-customer') && !params.event.target.classList.contains('edit-customer')) {

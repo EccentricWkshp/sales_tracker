@@ -38,11 +38,13 @@
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         var gridOptions = {
+            autoSizeStrategy: {
+                type: "fitCellContents",
+            },
             columnDefs: [
                 {
                     headerName: '',
                     field: 'delete',
-                    width: 40,
                     cellRenderer: function(params) {
                         return '<i class="fas fa-trash text-danger delete-product" style="cursor: pointer;"></i>';
                     },
@@ -51,21 +53,28 @@
                             deleteProduct(params.data.id);
                         }
                     },
+                    maxWidth: 40,
                     sortable: false,
-                    filter: false
+                    filter: false,
+                    resizable: false,
+                    suppressAutoSize: true,
+                    suppressSizeToFit: true
                 },
                 {
                     headerName: '',
                     field: 'edit',
-                    width: 40,
                     cellRenderer: function(params) {
                         return '<i class="fas fa-edit text-primary edit-product" style="cursor: pointer;"></i>';
                     },
                     onCellClicked: function(params) {
                         editProduct(params.data.id);
                     },
+                    maxWidth: 40,
                     sortable: false,
-                    filter: false
+                    filter: false,
+                    resizable: false,
+                    suppressAutoSize: true,
+                    suppressSizeToFit: true
                 },
                 { headerName: 'SKU', field: 'sku', sortable: true, sort: 'asc', filter: true },
                 { headerName: 'Description', field: 'description', sortable: true, filter: true },
@@ -85,6 +94,10 @@
                 flex: 1,
                 minWidth: 100,
                 resizable: true,
+                filterParams: {
+                    buttons: ["apply", "reset"],
+                    closeOnApply: true
+                }
             }
         };
 
