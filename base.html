@@ -1,0 +1,64 @@
+<!-- templates/base.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}
+        {% if company_info and company_info.name %}
+            {{ company_info.name }}
+        {% else %}
+            Sales Management System
+        {% endif %} Sales App{% endblock %}</title>
+        
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+
+    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-grid.css">
+    <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-theme-alpine.css">
+    <script src="https://unpkg.com/ag-grid-community/dist/ag-grid-community.min.noStyle.js"></script>
+
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <header>
+        <div class="container">
+            <div id="branding">
+                {% if company_info and company_info.logo %}
+                    <img src="{{ company_info.logo }}" alt="{{ company_info.name }} Logo" class="company-logo">
+                {% endif %}
+                <h1><a href="{{ url_for('index') }}">
+                    {% if company_info and company_info.name %}
+                        {{ company_info.name }}
+                    {% else %}
+                        Sales Management System
+                    {% endif %}
+                </a></h1>
+            </div>
+            <nav>
+                <ul>
+                    <li><a href="{{ url_for('index') }}"><i class="fas fa-home"></i> Dashboard</a></li>
+                    <li><a href="{{ url_for('sales') }}"><i class="fas fa-file-invoice-dollar"></i> Sales</a></li>
+                    <li><a href="{{ url_for('customers') }}"><i class="fas fa-users"></i> Customers</a></li>
+                    <li><a href="{{ url_for('products') }}"><i class="fas fa-box"></i> Products</a></li>
+                    <li><a href="{{ url_for('management') }}"><i class="fas fa-cogs"></i> Management</a></li>
+                    <li><a href="{{ url_for('logout') }}"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container">
+        <main>
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    {% block modal %}{% endblock %}
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>
