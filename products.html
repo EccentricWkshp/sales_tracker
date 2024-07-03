@@ -36,68 +36,88 @@
 
 {% block extra_scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    var gridOptions = {
-        columnDefs: [
-            { headerName: 'SKU', field: 'sku', sortable: true, sort: 'asc', filter: true },
-            { headerName: 'Description', field: 'description', sortable: true, filter: true },
-            { headerName: 'Price', field: 'price', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true },
-            {
-                headerName: 'Actions',
-                cellRenderer: function(params) {
-                    return `
-                        <button class="btn btn-primary edit-product" data-id="${params.data.id}"><i class="fas fa-edit"></i> Edit</button>
-                        <button class="btn btn-danger delete-product" data-id="${params.data.id}"><i class="fas fa-trash"></i> Delete</button>
-                    `;
+    document.addEventListener('DOMContentLoaded', function() {
+        var gridOptions = {
+            columnDefs: [
+                {
+                    headerName: '',
+                    field: 'delete',
+                    width: 40,
+                    cellRenderer: function(params) {
+                        return '<i class="fas fa-trash text-danger delete-product" style="cursor: pointer;"></i>';
+                    },
+                    onCellClicked: function(params) {
+                        if (confirm("Are you sure you want to delete this product?")) {
+                            deleteProduct(params.data.id);
+                        }
+                    },
+                    sortable: false,
+                    filter: false
+                },
+                {
+                    headerName: '',
+                    field: 'edit',
+                    width: 40,
+                    cellRenderer: function(params) {
+                        return '<i class="fas fa-edit text-primary edit-product" style="cursor: pointer;"></i>';
+                    },
+                    onCellClicked: function(params) {
+                        editProduct(params.data.id);
+                    },
+                    sortable: false,
+                    filter: false
+                },
+                { headerName: 'SKU', field: 'sku', sortable: true, sort: 'asc', filter: true },
+                { headerName: 'Description', field: 'description', sortable: true, filter: true },
+                { headerName: 'Price', field: 'price', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true }
+            ],
+            rowData: [
+                {% for product in products %}
+                {
+                    id: {{ product.id }},
+                    sku: '{{ product.sku }}',
+                    description: '{{ product.description }}',
+                    price: '{{ "%.2f"|format(product.price) }}'
+                },
+                {% endfor %}
+            ],
+            defaultColDef: {
+                flex: 1,
+                minWidth: 100,
+                resizable: true,
+            }
+        };
+
+        var gridDiv = document.querySelector('#productsGrid');
+        new agGrid.Grid(gridDiv, gridOptions);
+    });
+
+    function deleteProduct(productId) {
+        $.ajax({
+            url: "/products/delete/" + productId,
+            method: "POST",
+            success: function(response) {
+                if (response.success) {
+                    location.reload();
+                } else {
+                    alert("Error deleting product");
                 }
             }
-        ],
-        rowData: [
-            {% for product in products %}
-            {
-                id: {{ product.id }},
-                sku: '{{ product.sku }}',
-                description: '{{ product.description }}',
-                price: '{{ "%.2f"|format(product.price) }}'
-            },
-            {% endfor %}
-        ],
-        defaultColDef: {
-            flex: 1,
-            minWidth: 100,
-            resizable: true,
-        },
-    };
+        });
+    }
 
-    var gridDiv = document.querySelector('#productsGrid');
-    new agGrid.Grid(gridDiv, gridOptions);
+    function editProduct(productId) {
+        // Implement edit functionality (e.g., open modal)
+        $("#modalTitle").text("Edit Product");
+        $.get("/products/get/" + productId, function(data) {
+            $("#productId").val(data.id);
+            $("#sku").val(data.sku);
+            $("#description").val(data.description);
+            $("#price").val(('$' + data.price.toFixed(2).replace(/\B(?=(?:\d{3})+(?!\d))/g, ',')));
+            $("#productModal").show();
+        });
+    }
 
-    // Edit and delete functionality
-    gridDiv.addEventListener('click', function(event) {
-        if (event.target.classList.contains('edit-product')) {
-            var productId = event.target.getAttribute('data-id');
-            // Implement edit functionality
-        } else if (event.target.classList.contains('delete-product')) {
-            var productId = event.target.getAttribute('data-id');
-            if (confirm("Are you sure you want to delete this product?")) {
-                $.ajax({
-                    url: "/products/delete/" + productId,
-                    method: "POST",
-                    success: function(response) {
-                        if (response.success) {
-                            location.reload();
-                        } else {
-                            alert("Error deleting product");
-                        }
-                    }
-                });
-            }
-        }
-    });
-});
-</script>
-
-<script>
     $(document).ready(function() {
         var modal = $("#productModal");
         var addBtn = $("#addProductBtn");
@@ -118,18 +138,6 @@ document.addEventListener('DOMContentLoaded', function() {
             $("#productId").val("");
             cleave.setRawValue('');
             modal.show();
-        });
-    
-        $(".edit-product").click(function() {
-            var productId = $(this).data("id");
-            $("#modalTitle").text("Edit Product");
-            $.get("/products/get/" + productId, function(data) {
-                $("#productId").val(data.id);
-                $("#sku").val(data.sku);
-                $("#description").val(data.description);
-                cleave.setRawValue(data.price);
-                modal.show();
-            });
         });
     
         closeBtn.click(function() {
