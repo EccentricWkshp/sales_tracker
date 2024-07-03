@@ -6,7 +6,51 @@
 {% block content %}
 <h1>Sales</h1>
 <button id="addSaleBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Sale</button>
-<div id="salesGrid" class="ag-theme-alpine" style="height: 600px; width: 1200px;"></div>
+<div id="salesGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
+{% endblock %}
+
+{% block modal %}
+<div id="saleModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h2 id="modalTitle">Add Sale</h2>
+        <form id="saleForm" method="POST">
+            <input type="hidden" id="saleId" name="id">
+            <div class="form-group">
+                <label for="customer">Customer</label>
+                <select id="customer" name="customer_id" required>
+                    <option value="">Select a customer</option>
+                    {% for customer in customers %}
+                        <option value="{{ customer.id }}">{{ customer.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div id="lineItems">
+                <!-- Line items will be added here dynamically -->
+            </div>
+            <button type="button" id="addLineItem" class="btn btn-secondary"><i class="fas fa-plus"></i> Add Product</button>
+            <div class="summary">
+                <div class="form-group">
+                    <label for="subtotal">Subtotal</label>
+                    <input type="text" id="subtotal" name="subtotal" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="tax">Tax</label>
+                    <input type="text" id="tax" name="tax" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="shipping">Shipping</label>
+                    <input type="text" id="shipping" name="shipping" value="$0.00">
+                </div>
+                <div class="form-group">
+                    <label for="total">Total</label>
+                    <input type="text" id="total" name="total" readonly>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Sale</button>
+        </form>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -14,12 +58,12 @@
 document.addEventListener('DOMContentLoaded', function() {
     var gridOptions = {
         columnDefs: [
-            { headerName: 'Date', field: 'date', sortable: true, filter: true },
-            { headerName: 'Receipt #', field: 'receipt', sortable: true, filter: true },
-            { headerName: 'Customer', field: 'customer', sortable: true, filter: true },
-            { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true },
-            { headerName: 'Tax', field: 'tax', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true },
-            { headerName: 'Shipping', field: 'shipping', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true },
+            { headerName: 'Date', field: 'date', sortable: true, sort: 'desc', filter: true, flex: 1 },
+            { headerName: 'Receipt #', field: 'receipt', sortable: true, filter: true, flex: 1 },
+            { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
+            { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
+            { headerName: 'Tax', field: 'tax', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
+            { headerName: 'Shipping', field: 'shipping', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
             {
                 headerName: 'Actions',
                 cellRenderer: function(params) {
@@ -29,7 +73,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <a href="/sales/print/${params.data.id}" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
                         <button class="btn btn-danger delete-sale" data-id="${params.data.id}"><i class="fas fa-trash"></i> Delete</button>
                     `;
-                }
+                }, flex: 3
             }
         ],
         rowData: [
@@ -73,6 +117,227 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             }
         }
+    });
+});
+</script>
+
+<script>
+$(document).ready(function() {
+    var modal = $("#saleModal");
+    var addBtn = $("#addSaleBtn");
+    var closeBtn = $(".close");
+    var form = $("#saleForm");
+    var lineItemCount = 0;
+
+    // Initialize Cleave.js for currency formatting
+    var currencyInputs = {
+        shipping: new Cleave('#shipping', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        }),
+        subtotal: new Cleave('#subtotal', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        }),
+        tax: new Cleave('#tax', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        }),
+        total: new Cleave('#total', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        })
+    };
+
+    addBtn.click(function() {
+        $("#modalTitle").text("Add Sale");
+        form[0].reset();
+        $("#saleId").val("");
+        $("#lineItems").empty();
+        lineItemCount = 0;
+        updateTotals();
+        modal.show();
+    });
+
+    $(".edit-sale").click(function() {
+        var saleId = $(this).data("id");
+        $("#modalTitle").text("Edit Sale");
+        $.get("/sales/get/" + saleId, function(data) {
+            $("#saleId").val(data.id);
+            $("#customer").val(data.customer_id);
+            currencyInputs.shipping.setRawValue(data.shipping);
+            $("#lineItems").empty();
+            lineItemCount = 0;
+            data.line_items.forEach(function(item) {
+                addLineItem(item);
+            });
+            updateTotals();
+            modal.show();
+        });
+    });
+
+    closeBtn.click(function() {
+        modal.hide();
+    });
+
+    $(window).click(function(event) {
+        if (event.target == modal[0]) {
+            modal.hide();
+        }
+    });
+
+    $("#addLineItem").click(function() {
+        addLineItem();
+    });
+
+    function addLineItem(item = null) {
+        lineItemCount++;
+        var lineItem = `
+            <div class="line-item">
+                <h3>Product ${lineItemCount}</h3>
+                <div class="form-group">
+                    <label for="product_${lineItemCount}">Product</label>
+                    <select id="product_${lineItemCount}" class="product-select" required>
+                        <option value="">Select a product</option>
+                        {% for product in products %}
+                            <option value="{{ product.id }}" data-price="{{ product.price }}">{{ product.sku }} - {{ product.description }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="quantity_${lineItemCount}">Quantity</label>
+                    <input type="number" id="quantity_${lineItemCount}" class="quantity" min="1" value="1" required>
+                </div>
+                <div class="form-group">
+                    <label for="price_${lineItemCount}">Price</label>
+                    <input type="text" id="price_${lineItemCount}" class="price" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="total_${lineItemCount}">Total</label>
+                    <input type="text" id="total_${lineItemCount}" class="line-total" readonly>
+                </div>
+                <button type="button" class="btn btn-secondary btn-danger remove-line-item"><i class="fas fa-trash"></i> Remove</button>
+            </div>
+        `;
+        $("#lineItems").append(lineItem);
+        
+        // Initialize Cleave.js for the new line item
+        new Cleave(`#price_${lineItemCount}`, {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        });
+        new Cleave(`#total_${lineItemCount}`, {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        });
+        
+        if (item) {
+            $(`#product_${lineItemCount}`).val(item.product_id);
+            $(`#quantity_${lineItemCount}`).val(item.quantity);
+            $(`#price_${lineItemCount}`).val(item.price_each);
+            $(`#total_${lineItemCount}`).val(item.total_price);
+        }
+        
+        updateLineTotals($(`#lineItems .line-item`).last());
+    }
+
+    $(document).on('change', '.product-select', function() {
+        var lineItem = $(this).closest('.line-item');
+        var price = $(this).find(':selected').data('price');
+        lineItem.find('.price').val(price);
+        updateLineTotals(lineItem);
+    });
+
+    $(document).on('input', '.quantity', function() {
+        updateLineTotals($(this).closest('.line-item'));
+    });
+
+    $(document).on('click', '.remove-line-item', function() {
+        $(this).closest('.line-item').remove();
+        updateTotals();
+    });
+
+    $("#shipping").on('input', function() {
+        updateTotals();
+    });
+
+    function updateLineTotals(lineItem) {
+        var quantity = parseInt(lineItem.find('.quantity').val()) || 0;
+        var price = parseFloat(lineItem.find('.price').val().replace('$', '')) || 0;
+        var total = quantity * price;
+        lineItem.find('.line-total').val(total.toFixed(2));
+        updateTotals();
+    }
+
+    function updateTotals() {
+        var subtotal = 0;
+        $('.line-total').each(function() {
+            subtotal += parseFloat($(this).val().replace('$', '')) || 0;
+        });
+        currencyInputs.subtotal.setRawValue(subtotal.toFixed(2));
+
+        var shipping = parseFloat(currencyInputs.shipping.getRawValue()) || 0;
+
+        $.ajax({
+            url: '/api/calculate_tax',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ total: subtotal }),
+            success: function(data) {
+                var tax = data.tax;
+                currencyInputs.tax.setRawValue(tax.toFixed(2));
+                var total = subtotal + tax + shipping;
+                currencyInputs.total.setRawValue(total.toFixed(2));
+            }
+        });
+    }
+
+    form.submit(function(e) {
+        e.preventDefault();
+        var url = $("#saleId").val() ? "/sales/edit/" + $("#saleId").val() : "/sales/add";
+        var lineItems = [];
+        $('.line-item').each(function() {
+            lineItems.push({
+                product_id: $(this).find('.product-select').val(),
+                quantity: $(this).find('.quantity').val(),
+                price_each: $(this).find('.price').val().replace('$', ''),
+                total_price: $(this).find('.line-total').val().replace('$', '')
+            });
+        });
+        
+        $.ajax({
+            url: url,
+            method: "POST",
+            data: JSON.stringify({
+                customer_id: $("#customer").val(),
+                line_items: lineItems,
+                subtotal: currencyInputs.subtotal.getRawValue(),
+                tax: currencyInputs.tax.getRawValue(),
+                shipping: currencyInputs.shipping.getRawValue(),
+                total: currencyInputs.total.getRawValue()
+            }),
+            contentType: "application/json",
+            success: function(response) {
+                if (response.success) {
+                    modal.hide();
+                    location.reload();
+                } else {
+                    alert("Error saving sale");
+                }
+            }
+        });
     });
 });
 </script>

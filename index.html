@@ -42,17 +42,19 @@
 
     <div class="recent-sales">
         <h2>Recent Sales</h2>
-        <div id="recentSalesGrid" class="ag-theme-alpine" style="height: 400px; width: 1200px;"></div>
+        
+        <div id="recentSalesGrid" class="ag-theme-alpine" style="width: 100%;"></div>
     
     {% block extra_scripts %}
     <script>
     
     document.addEventListener('DOMContentLoaded', function() {
         var gridOptions = {
+            domLayout: "autoHeight",
             columnDefs: [
-                { headerName: 'Date', field: 'date', sortable: true, filter: true },
-                { headerName: 'Customer', field: 'customer', sortable: true, filter: true },
-                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true },
+                { headerName: 'Date', field: 'date', sortable: true, sort: 'desc', filter: true, flex: 1 },
+                { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
+                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
                 {
                     headerName: 'Actions',
                     cellRenderer: function(params) {
@@ -60,7 +62,7 @@
                             <a href="/sales/view/${params.data.id}" class="btn btn-primary"><i class="fas fa-eye"></i> View</a>
                             <a href="/sales/print/${params.data.id}" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
                         `;
-                    }
+                    }, flex: 1
                 }
             ],
             rowData: [
@@ -79,9 +81,13 @@
                 resizable: true,
             },
         };
-
+        
         var gridDiv = document.querySelector('#recentSalesGrid');
-        new agGrid.Grid(gridDiv, gridOptions);
+        if (gridDiv && !gridDiv.gridInitialized) {
+            new agGrid.Grid(gridDiv, gridOptions);
+            gridDiv.gridInitialized = true;
+        }
+
     });
 
     $(document).ready(function() {

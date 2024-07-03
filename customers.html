@@ -6,7 +6,36 @@
 {% block content %}
 <h1>Customers</h1>
 <button id="addCustomerBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Customer</button>
-<div id="customersGrid" class="ag-theme-alpine" style="height: 600px; width: 1200px;"></div>
+<div id="customersGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
+{% endblock %}
+
+{% block modal %}
+<div id="customerModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h2 id="modalTitle">Add Customer</h2>
+        <form id="customerForm" method="POST">
+            <input type="hidden" id="customerId" name="id">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name" required>
+            </div>
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email">
+            </div>
+            <div class="form-group">
+                <label for="billing_address">Billing Address</label>
+                <textarea id="billing_address" name="billing_address"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="shipping_address">Shipping Address</label>
+                <textarea id="shipping_address" name="shipping_address"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Customer</button>
+        </form>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -14,7 +43,7 @@
 document.addEventListener('DOMContentLoaded', function() {
     var gridOptions = {
         columnDefs: [
-            { headerName: 'Name', field: 'name', sortable: true, filter: true },
+            { headerName: 'Name', field: 'name', sortable: true, sort: 'asc', filter: true },
             { headerName: 'Email', field: 'email', sortable: true, filter: true },
             { headerName: 'Billing Address', field: 'billing_address', sortable: true, filter: true },
             { headerName: 'Shipping Address', field: 'shipping_address', sortable: true, filter: true },
@@ -73,4 +102,68 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 </script>
+
+<script>
+    $(document).ready(function() {
+        var modal = $("#customerModal");
+        var addBtn = $("#addCustomerBtn");
+        var closeBtn = $(".close");
+        var form = $("#customerForm");
+    
+        addBtn.click(function() {
+            $("#modalTitle").text("Add Customer");
+            form[0].reset();
+            $("#customerId").val("");
+            modal.show();
+        });
+    
+        $(".edit-customer").click(function() {
+            var customerId = $(this).data("id");
+            $("#modalTitle").text("Edit Customer");
+            $.get("/customers/get/" + customerId, function(data) {
+                $("#customerId").val(data.id);
+                $("#name").val(data.name);
+                $("#email").val(data.email);
+                $("#billing_address").val(data.billing_address);
+                $("#shipping_address").val(data.shipping_address);
+                modal.show();
+            });
+        });
+    
+        closeBtn.click(function() {
+            modal.hide();
+        });
+    
+        $(window).click(function(event) {
+            if (event.target == modal[0]) {
+                modal.hide();
+            }
+        });
+    
+        form.submit(function(e) {
+            e.preventDefault();
+            var url = $("#customerId").val() ? "/customers/edit/" + $("#customerId").val() : "/customers/add";
+            $.ajax({
+                url: url,
+                method: "POST",
+                data: JSON.stringify({
+                    name: $("#name").val(),
+                    email: $("#email").val(),
+                    billing_address: $("#billing_address").val(),
+                    shipping_address: $("#shipping_address").val()
+                }),
+                contentType: "application/json",
+                success: function(response) {
+                    if (response.success) {
+                        modal.hide();
+                        location.reload();
+                    } else {
+                        alert("Error saving customer");
+                    }
+                }
+            });
+        });
+    });
+    </script>
+
 {% endblock %}
