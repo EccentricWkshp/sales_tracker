@@ -12,7 +12,6 @@
     <thead>
         <tr>
             <th>Name</th>
-            <th>Email</th>
             <th>Billing Address</th>
             <th>Shipping Address</th>
             <th>Actions</th>
@@ -22,7 +21,6 @@
         {% for customer in customers %}
         <tr>
             <td>{{ customer.name }}</td>
-            <td>{{ customer.email }}</td>
             <td>{{ customer.billing_address }}</td>
             <td>{{ customer.shipping_address }}</td>
             <td>

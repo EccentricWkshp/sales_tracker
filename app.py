@@ -16,14 +16,19 @@ from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
+
+UPLOAD_FOLDER = 'static/uploads'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 # Use environment variable for secret key, with a fallback for development
 app.config['SECRET_KEY'] = 'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
@@ -50,6 +55,10 @@ def create_admin(username, password):
 
 app.cli.add_command(create_admin)
 
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
 # Models
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -61,6 +70,18 @@ class User(UserMixin, db.Model):
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+class CompanyInfo(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    address = db.Column(db.String(200), nullable=False)
+    phone = db.Column(db.String(20), nullable=False)
+    email = db.Column(db.String(100), nullable=False)
+    logo = db.Column(db.String(200))  # This will store the path to the logo file
+
+    @classmethod
+    def get_info(cls):
+        return cls.query.first()
 
 class Customer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -79,14 +100,13 @@ class Product(db.Model):
     price = db.Column(db.Float, nullable=False)
 
 class SalesReceipt(db.Model):
-    shipstation_order_id = db.Column(db.String(50))  # Add the new column here
     id = db.Column(db.Integer, primary_key=True)
+    shipstation_order_id = db.Column(db.String(50), unique=True, nullable=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
     date = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp())
     total = db.Column(db.Float, nullable=False)
     tax = db.Column(db.Float, nullable=False)
     shipping = db.Column(db.Float, nullable=False)
-    shipstation_order_id = db.Column(db.String(50), unique=True, nullable=True)
     line_items = db.relationship('LineItem', backref='sales_receipt', lazy=True)
 
 class LineItem(db.Model):
@@ -124,13 +144,15 @@ def index():
     total_revenue = db.session.query(func.sum(SalesReceipt.total)).scalar() or 0
     total_sales = SalesReceipt.query.count()
     total_customers = Customer.query.count()
-    recent_sales = SalesReceipt.query.order_by(SalesReceipt.date.desc()).limit(5).all()
+    recent_sales = SalesReceipt.query.order_by(SalesReceipt.date.desc()).limit(10).all()
+    company_info = CompanyInfo.get_info()
 
-    return render_template('index.html',
+    return render_template('index.html', 
                            total_revenue=total_revenue,
                            total_sales=total_sales,
                            total_customers=total_customers,
-                           recent_sales=recent_sales)
+                           recent_sales=recent_sales,
+                           company_info=company_info)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -152,11 +174,69 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
+@app.route('/management', methods=['GET', 'POST'])
+@login_required
+def management():
+    company_info = CompanyInfo.get_info()
+    shipstation_credentials = ShipStationCredentials.query.first()
+
+    if request.method == 'POST':
+        if 'logo' in request.files:
+            file = request.files['logo']
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(file_path)
+                logo_path = f'/static/uploads/{filename}'
+            else:
+                logo_path = company_info.logo if company_info else None
+        else:
+            logo_path = company_info.logo if company_info else None
+
+        if company_info:
+            company_info.name = request.form['name']
+            company_info.address = request.form['address']
+            company_info.phone = request.form['phone']
+            company_info.email = request.form['email']
+            company_info.logo = logo_path
+        else:
+            new_info = CompanyInfo(
+                name=request.form['name'],
+                address=request.form['address'],
+                phone=request.form['phone'],
+                email=request.form['email'],
+                logo=logo_path
+            )
+            db.session.add(new_info)
+
+        if shipstation_credentials:
+            shipstation_credentials.api_key = request.form['api_key']
+            shipstation_credentials.api_secret = request.form['api_secret']
+        else:
+            new_credentials = ShipStationCredentials(
+                api_key=request.form['api_key'],
+                api_secret=request.form['api_secret']
+            )
+            db.session.add(new_credentials)
+
+        try:
+            db.session.commit()
+            flash('Settings updated successfully.', 'success')
+        except IntegrityError:
+            db.session.rollback()
+            flash('Error updating settings.', 'error')
+
+        return redirect(url_for('management'))
+
+    return render_template('management.html', company_info=company_info, shipstation_credentials=shipstation_credentials)
+
 @app.route('/customers')
 @login_required
 def customers():
     customers = Customer.query.all()
-    return render_template('customers.html', customers=customers)
+    company_info = CompanyInfo.get_info()
+
+    return render_template('customers.html', customers=customers, company_info=company_info)
 
 @app.route('/customers/add', methods=['POST'])
 @login_required
@@ -208,7 +288,9 @@ def delete_customer(id):
 @login_required
 def products():
     products = Product.query.all()
-    return render_template('products.html', products=products)
+    company_info = CompanyInfo.get_info()
+
+    return render_template('products.html', products=products, company_info=company_info)
 
 @app.route('/products/add', methods=['POST'])
 @login_required
@@ -257,9 +339,12 @@ def delete_product(id):
 @login_required
 def sales():
     sales = SalesReceipt.query.options(joinedload(SalesReceipt.customer)).all()
+    sorted_sales = sorted(sales, key=lambda sale: sale.date, reverse=True)
     customers = Customer.query.all()
     products = Product.query.all()
-    return render_template('sales.html', sales=sales, customers=customers, products=products)
+    company_info = CompanyInfo.get_info()
+
+    return render_template('sales.html', sales=sorted_sales, customers=customers, products=products, company_info=company_info)
 
 @app.route('/sales/add', methods=['POST'])
 @login_required
@@ -274,6 +359,7 @@ def add_sale():
     )
     db.session.add(new_sale)
     db.session.flush()  # This assigns an ID to new_sale
+    new_sale.shipstation_order_id = new_sale.id
 
     for item in data['line_items']:
         line_item = LineItem(
@@ -294,6 +380,7 @@ def get_sale(id):
     sale = SalesReceipt.query.options(joinedload(SalesReceipt.customer), joinedload(SalesReceipt.line_items)).get_or_404(id)
     return jsonify({
         'id': sale.id,
+        'shipstation_order_id': sale.shipstation_order_id,
         'customer_id': sale.customer_id,
         'customer_name': sale.customer.name,
         'date': sale.date.strftime('%m-%d-%Y'),
@@ -388,6 +475,14 @@ def delete_sale(id):
     db.session.commit()
     return jsonify({'success': True})
 
+@app.route('/sales/print/<int:id>')
+@login_required
+def print_sale(id):
+    sale = SalesReceipt.query.get_or_404(id)
+    company_info = CompanyInfo.get_info()
+
+    return render_template('print_sale.html', sale=sale, company_info=company_info)
+
 @app.route('/api/calculate_tax', methods=['POST'])
 @login_required
 def calculate_tax():
@@ -406,33 +501,6 @@ def get_product_api(id):
         'description': product.description,
         'price': float(product.price)
     })
-
-@app.route('/shipstation/credentials', methods=['GET', 'POST'])
-@login_required
-def shipstation_credentials():
-    if request.method == 'POST':
-        api_key = request.form['api_key']
-        api_secret = request.form['api_secret']
-        
-        credentials = ShipStationCredentials.query.first()
-        if credentials:
-            credentials.api_key = api_key
-            credentials.api_secret = api_secret
-        else:
-            credentials = ShipStationCredentials(api_key=api_key, api_secret=api_secret)
-            db.session.add(credentials)
-        
-        try:
-            db.session.commit()
-            flash('ShipStation credentials updated successfully.', 'success')
-        except IntegrityError:
-            db.session.rollback()
-            flash('Error updating ShipStation credentials.', 'error')
-        
-        return redirect(url_for('shipstation_credentials'))
-    
-    credentials = ShipStationCredentials.query.first()
-    return render_template('shipstation_credentials.html', credentials=credentials)
 
 @app.route('/shipstation/fetch_orders', methods=['POST'])
 @login_required
@@ -476,10 +544,11 @@ def fetch_shipstation_orders():
             if customer.id is None:
                 customers_created += 1
 
-            existing_sale = SalesReceipt.query.filter_by(id=order['sales_receipt_number']).first()
+            existing_sale = SalesReceipt.query.filter_by(id=order['order_id']).first()
             
             if existing_sale:
                 # Update existing sale
+                existing_sale.shipstation_order_id = order['sales_receipt_number']
                 existing_sale.customer_id = customer.id
                 existing_sale.date = order['sales_receipt_date']
                 existing_sale.total = order['order_total']
@@ -494,7 +563,8 @@ def fetch_shipstation_orders():
                     total=order['order_total'],
                     tax=order['tax_amount'],
                     shipping=order['shipping_amount'],
-                    id=order['sales_receipt_number']
+                    id=order['order_id'],
+                    shipstation_order_id=order['sales_receipt_number']
                 )
                 db.session.add(new_sale)
                 orders_created += 1
@@ -505,7 +575,7 @@ def fetch_shipstation_orders():
 
         except Exception as e:
             db.session.rollback()
-            error_msg = f"Error processing order {order['sales_receipt_number']}: {str(e)}"
+            error_msg = f"Error processing order {order['order_id']}: {str(e)}"
             app.logger.error(error_msg)
             errors.append(error_msg)
             continue
@@ -530,11 +600,11 @@ def fetch_shipstation_orders():
         return jsonify({'error': error_msg}), 500
 
 def get_or_create_customer(customer_data):
-    customer = Customer.query.filter_by(email=customer_data['name']).first()
+    customer = Customer.query.filter_by(email=customer_data['email']).first()
     if not customer:
         customer = Customer(
             name=customer_data['name'],
-            email=customer_data['name'],  # Using name as email as a fallback
+            email=customer_data['email'],
             phone=customer_data['phone'],
             billing_address=format_address(customer_data),
             shipping_address=format_address(customer_data)
@@ -556,20 +626,15 @@ def process_shipstation_data(shipstation_orders):
     processed_orders = []
 
     for order in shipstation_orders:
-        app.logger.error(f"order date: {order['orderDate']}")
-
-        #ship_date = datetime.strptime(order['shipDate'], '%Y-%m-%dT%H:%M:%S.%f')
-
-        #if sales_receipt_date is None or ship_date is None:
-        #    app.logger.error(f"Skipping order {order['orderNumber']} due to invalid date")
-        #    continue
 
         processed_order = {
+            'order_id': order['orderId'],
             'sales_receipt_number': order['orderNumber'],
             'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
             #'ship_date': parse_shipstation_date(order['shipDate']),
             'customer': {
                 'name': order['shipTo']['name'],
+                'email': order['customerEmail'],
                 'company': order['shipTo'].get('company', ''),
                 'street1': order['shipTo']['street1'],
                 'street2': order['shipTo'].get('street2', ''),

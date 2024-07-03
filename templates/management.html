@@ -1,0 +1,48 @@
+<!-- templates/management.html -->
+{% extends "base.html" %}
+
+{% block title %}Management{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Management Interface</h1>
+    <form method="POST" enctype="multipart/form-data">
+        <h2>Company Information</h2>
+        <div class="form-group">
+            <label for="name">Company Name</label>
+            <input type="text" id="name" name="name" class="form-control" value="{{ company_info.name if company_info else '' }}">
+        </div>
+        <div class="form-group">
+            <label for="address">Address</label>
+            <textarea id="address" name="address" class="form-control">{{ company_info.address if company_info else '' }}</textarea>
+        </div>
+        <div class="form-group">
+            <label for="phone">Phone</label>
+            <input type="tel" id="phone" name="phone" class="form-control" value="{{ company_info.phone if company_info else '' }}">
+        </div>
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" class="form-control" value="{{ company_info.email if company_info else '' }}">
+        </div>
+        <div class="form-group">
+            <label for="logo">Logo</label>
+            <input type="file" id="logo" name="logo" class="form-control-file">
+            {% if company_info and company_info.logo %}
+                <img src="{{ company_info.logo }}" alt="Company Logo" style="max-width: 200px; margin-top: 10px;">
+            {% endif %}
+        </div>
+
+        <h2>ShipStation Settings</h2>
+        <div class="form-group">
+            <label for="api_key">API Key</label>
+            <input type="text" id="api_key" name="api_key" class="form-control" value="{{ shipstation_credentials.api_key if shipstation_credentials else '' }}" required>
+        </div>
+        <div class="form-group">
+            <label for="api_secret">API Secret</label>
+            <input type="password" id="api_secret" name="api_secret" class="form-control" value="{{ shipstation_credentials.api_secret if shipstation_credentials else '' }}" required>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+    </form>
+</div>
+{% endblock %}

@@ -4,7 +4,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Sales App{% endblock %}</title>
+    <title>{% block title %}
+        {% if company_info and company_info.name %}
+            {{ company_info.name }}
+        {% else %}
+            Sales Management System
+        {% endif %} Sales App{% endblock %}</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     {% block extra_head %}{% endblock %}
@@ -13,15 +18,24 @@
     <header>
         <div class="container">
             <div id="branding">
-                <h1><a href="{{ url_for('index') }}">Sales Management System</a></h1>
+                {% if company_info and company_info.logo %}
+                    <img src="{{ company_info.logo }}" alt="{{ company_info.name }} Logo" class="company-logo">
+                {% endif %}
+                <h1><a href="{{ url_for('index') }}">
+                    {% if company_info and company_info.name %}
+                        {{ company_info.name }}
+                    {% else %}
+                        Sales Management System
+                    {% endif %}
+                </a></h1>
             </div>
             <nav>
                 <ul>
                     <li><a href="{{ url_for('index') }}"><i class="fas fa-home"></i> Dashboard</a></li>
+                    <li><a href="{{ url_for('sales') }}"><i class="fas fa-file-invoice-dollar"></i> Sales</a></li>
                     <li><a href="{{ url_for('customers') }}"><i class="fas fa-users"></i> Customers</a></li>
                     <li><a href="{{ url_for('products') }}"><i class="fas fa-box"></i> Products</a></li>
-                    <li><a href="{{ url_for('sales') }}"><i class="fas fa-file-invoice-dollar"></i> Sales</a></li>
-                    <li><a href="{{ url_for('shipstation_credentials') }}"><i class="fas fa-ship"></i> ShipStation Settings</a></li>
+                    <li><a href="{{ url_for('management') }}"><i class="fas fa-cogs"></i> Management</a></li>
                     <li><a href="{{ url_for('logout') }}"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
                 </ul>
             </nav>
