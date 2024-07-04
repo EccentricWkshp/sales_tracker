@@ -346,6 +346,34 @@ def get_customer(id):
         'shipping_address': customer.shipping_address
     })
 
+@app.route('/customers/view/<int:id>')
+@login_required
+def view_customer(id):
+    customer = Customer.query.get_or_404(id)
+    orders = SalesReceipt.query.filter_by(customer_id=id).order_by(SalesReceipt.date.desc()).all()
+    
+    return render_template('view_customer.html', customer=customer, orders=orders)
+
+@app.route('/api/customer_orders/<int:id>')
+@login_required
+def get_customer_orders(id):
+    orders = SalesReceipt.query.filter_by(customer_id=id).options(
+        joinedload(SalesReceipt.line_items).joinedload(LineItem.product)
+    ).order_by(SalesReceipt.date.desc()).all()
+    
+    order_data = []
+    for order in orders:
+        order_data.append({
+            'id': order.id,
+            'date': order.date.strftime('%Y-%m-%d'),
+            'total': float(order.total),
+            'tax': float(order.tax),
+            'shipping': float(order.shipping),
+            'items': ', '.join([f"{item.quantity}x {item.product.sku}" for item in order.line_items])
+        })
+    
+    return jsonify(order_data)
+
 @app.route('/customers/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_customer(id):
@@ -422,10 +450,12 @@ def sales():
     sales = SalesReceipt.query.options(joinedload(SalesReceipt.customer)).all()
     sorted_sales = sorted(sales, key=lambda sale: sale.date, reverse=True)
     customers = Customer.query.all()
+    sorted_customers = sorted(customers, key=lambda customer: customer.name, reverse=False)
     products = Product.query.all()
+    sorted_products = sorted(products, key=lambda product: product.sku, reverse=False)
     company_info = CompanyInfo.get_info()
 
-    return render_template('sales.html', sales=sorted_sales, customers=customers, products=products, company_info=company_info)
+    return render_template('sales.html', sales=sorted_sales, customers=sorted_customers, products=sorted_products, company_info=company_info)
 
 @app.route('/sales/add', methods=['POST'])
 @login_required
@@ -534,9 +564,12 @@ def edit_sale(id):
 
     # For GET requests, render the edit form
     customers = Customer.query.all()
+    sorted_customers = sorted(customers, key=lambda customer: customer.name, reverse=False)
     products = Product.query.all()
+    sorted_products = sorted(products, key=lambda product: product.sku, reverse=False)
     company_info = CompanyInfo.get_info()
-    return render_template('edit_sale.html', sale=sale, customers=customers, products=products, company_info=company_info)
+
+    return render_template('edit_sale.html', sale=sale, customers=sorted_customers, products=sorted_products, company_info=company_info)
 
 @app.route('/sales/view/<int:id>')
 @login_required
@@ -652,11 +685,11 @@ def fetch_shipstation_orders():
                 
                 if existing_sale:
                     # Update existing sale
-                    existing_sale.customer_id = customer.id
-                    existing_sale.date = order['sales_receipt_date']
-                    existing_sale.total = order['order_total']
-                    existing_sale.tax = order['tax_amount']
-                    existing_sale.shipping = order['shipping_amount']
+                    #existing_sale.customer_id = customer.id
+                    #existing_sale.date = order['sales_receipt_date']
+                    #existing_sale.total = order['order_total']
+                    #existing_sale.tax = order['tax_amount']
+                    #existing_sale.shipping = order['shipping_amount']
                     orders_updated += 1
                 else:
                     # Create a new sale
@@ -685,8 +718,7 @@ def fetch_shipstation_orders():
     try:
         db.session.commit()
         message = (f'Successfully processed {len(processed_orders)} orders from ShipStation. '
-                   f'Created {orders_created} new orders, updated {orders_updated} existing orders, '
-                   f'created {customers_created} new customers, and updated {customers_updated} existing customers.')
+                   f'Created {orders_created} new orders and created {customers_created} new customers.')
         if errors:
             message += f' Encountered {len(errors)} errors.'
         
@@ -744,13 +776,13 @@ def get_or_create_customer(customer_data):
             shipping_address=format_address(customer_data)
         )
         db.session.add(customer)
-    else:
-        # Update existing customer information
-        customer.name = formatted_name
-        customer.company = customer_data.get('company', customer.company)
-        customer.phone = customer_data.get('phone', customer.phone)
-        customer.billing_address = format_address(customer_data)
-        customer.shipping_address = format_address(customer_data)
+    #else:
+    #    # Update existing customer information
+    #    customer.name = formatted_name
+    #    customer.company = customer_data.get('company', customer.company)
+    #    customer.phone = customer_data.get('phone', customer.phone)
+    #    customer.billing_address = format_address(customer_data)
+    #    customer.shipping_address = format_address(customer_data)
 
     return customer
 
