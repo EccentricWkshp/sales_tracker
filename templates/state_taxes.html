@@ -4,6 +4,78 @@
 
 {% block content %}
 <h1>State Taxes</h1>
+
+<div class="summary-section">
+    <div id="taxesSection">
+        <h2>Taxes</h2>
+        <table class="data-table">
+            <tr>
+                <th>Classification</th>
+                <th>Amount</th>
+                <th>Deductions</th>
+            </tr>
+            <tr>
+                <td>Manufacturing</td>
+                <td id="manufacturingAmount">$0.00</td>
+                <td id="manufacturingDeductions"></td>
+            </tr>
+            <tr>
+                <td>Retailing</td>
+                <td id="retailingAmount">$0.00</td>
+                <td id="retailingDeductions"></td>
+            </tr>
+            <tr>
+                <td>Products Manufactured in WA</td>
+                <td id="waManufacturedAmount">$0.00</td>
+                <td id="waManufacturedDeductions"></td>
+            </tr>
+            <tr>
+                <td>Interstate & Foreign Sales</td>
+                <td id="interstateForeignAmount">$0.00</td>
+                <td id="interstateForeignDeductions"></td>
+            </tr>
+        </table>
+    </div>
+
+    <div id="statisticsSection">
+        <h2>Statistics</h2>
+        <table class="data-table">
+            <tr>
+                <th>Metric</th>
+                <th>Value</th>
+            </tr>
+            <tr>
+                <td>Sales</td>
+                <td id="salesCount">0</td>
+            </tr>
+            <tr>
+                <td>Total Retail</td>
+                <td>$<span id="totalRetail">0.00</span></td>
+            </tr>
+            <tr>
+                <td>Total Manufacturing</td>
+                <td>$<span id="totalManufacturing">0.00</span></td>
+            </tr>
+            <tr>
+                <td>Total Shipping</td>
+                <td>$<span id="totalShipping">0.00</span></td>
+            </tr>
+            <tr>
+                <td>Total Retail (Outside WA)</td>
+                <td>$<span id="totalRetailOutsideWA">0.00</span></td>
+            </tr>
+            <tr>
+                <td>Total Manufacturing (Outside WA)</td>
+                <td>$<span id="totalManufacturingOutsideWA">0.00</span></td>
+            </tr>
+            <tr>
+                <td>Total Shipping (Outside WA)</td>
+                <td>$<span id="totalShippingOutsideWA">0.00</span></td>
+            </tr>
+        </table>
+    </div>
+</div>
+
 <div class="filter-controls">
     <label for="quarterSelect">Quarter:</label>
     <select id="quarterSelect">
@@ -18,6 +90,7 @@
 
     <button id="applyFilter">Apply Filter</button>
 </div>
+
 <div id="stateTaxesGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
 {% endblock %}
 
@@ -51,9 +124,9 @@ document.addEventListener('DOMContentLoaded', function() {
         domLayout: "autoHeight",
         columnDefs: [
             { 
-                headerName: 'Date',
-                field: 'date',
-                sortable: true,
+                headerName: 'Date', 
+                field: 'date', 
+                sortable: true, 
                 filter: 'agDateColumnFilter',
                 filterParams: {
                     comparator: function(filterLocalDateAtMidnight, cellValue) {
@@ -112,23 +185,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     .then(response => response.json())
                     .then(data => {
                         console.log('Data received:', data);
-                        setTimeout(() => {
-                            params.successCallback(data.rows, data.lastRow);
-                            if (params.startRow === 0) {
-                                gridApi.sizeColumnsToFit();
-                            }
-                        }, 0);
+                        params.successCallback(data.rows, data.lastRow);
+                        updateStatistics(data.rows);
                     })
                     .catch(error => {
                         console.error('Error fetching data:', error);
                         params.failCallback();
                     });
             }
-        },
-        cacheBlockSize: 100,
-        maxBlocksInCache: 10,
-        autoSizeStrategy: {
-            type: "fitCellContents",
         },
         onGridReady: function(params) {
             params.api.sizeColumnsToFit();
@@ -143,20 +207,56 @@ document.addEventListener('DOMContentLoaded', function() {
         return '$' + params.value.toFixed(2);
     }
 
+    function updateStatistics(rows) {
+        var salesCount = rows.length;
+        var totalRetail = 0;
+        var totalManufacturing = 0;
+        var totalShipping = 0;
+        var totalRetailOutsideWA = 0;
+        var totalManufacturingOutsideWA = 0;
+        var totalShippingOutsideWA = 0;
+
+        rows.forEach(function(row) {
+            totalRetail += row.retail;
+            totalManufacturing += row.manufacturing;
+            totalShipping += row.shipping;
+            
+            if (row.state !== 'WA' && !row.state.startsWith('Washington')) {
+                totalRetailOutsideWA += row.retail;
+                totalManufacturingOutsideWA += row.manufacturing;
+                totalShippingOutsideWA += row.shipping;
+            }
+        });
+
+        document.getElementById('salesCount').textContent = salesCount;
+        document.getElementById('totalRetail').textContent = totalRetail.toFixed(2);
+        document.getElementById('totalManufacturing').textContent = totalManufacturing.toFixed(2);
+        document.getElementById('totalShipping').textContent = totalShipping.toFixed(2);
+        document.getElementById('totalRetailOutsideWA').textContent = totalRetailOutsideWA.toFixed(2);
+        document.getElementById('totalManufacturingOutsideWA').textContent = totalManufacturingOutsideWA.toFixed(2);
+        document.getElementById('totalShippingOutsideWA').textContent = totalShippingOutsideWA.toFixed(2);
+
+        // Update tax table
+        document.getElementById('manufacturingAmount').textContent = '$' + totalManufacturing.toFixed(2);
+        document.getElementById('retailingAmount').textContent = '$' + (totalRetail + totalShipping).toFixed(2);
+        document.getElementById('waManufacturedAmount').textContent = '$' + totalManufacturing.toFixed(2);
+        document.getElementById('interstateForeignAmount').textContent = '$' + totalManufacturingOutsideWA.toFixed(2);
+        document.getElementById('manufacturingDeductions').textContent = '$' + totalShippingOutsideWA.toFixed(2);
+        document.getElementById('retailingDeductions').textContent = '$' + (totalRetailOutsideWA + totalShippingOutsideWA).toFixed(2);
+    }
+
     var gridDiv = document.querySelector('#stateTaxesGrid');
     var gridApi = agGrid.createGrid(gridDiv, gridOptions);
 
     document.getElementById('applyFilter').addEventListener('click', function() {
-        setTimeout(() => {
-            gridApi.purgeInfiniteCache();
-        }, 0);
+        gridApi.purgeInfiniteCache();
     });
 
-    //window.addEventListener('resize', function() {
-    //    setTimeout(function() {
-    //        gridApi.sizeColumnsToFit();
-    //    });
-    //});
+    window.addEventListener('resize', function() {
+        setTimeout(function() {
+            gridApi.sizeColumnsToFit();
+        });
+    });
 });
 </script>
 {% endblock %}

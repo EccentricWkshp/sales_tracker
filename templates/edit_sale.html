@@ -1,13 +1,15 @@
-<!-- templates/edit_sale.html -->
 {% extends "base.html" %}
 
 {% block title %}Edit Sales Receipt #{{ sale.id }}{% endblock %}
 
 {% block content %}
 <div class="edit-sale">
-    <div class="sale-header">
-        <h1>Edit Sales Receipt #{{ sale.id }}</h1>
-
+    <div class="invoice-header">
+        <h1 class="invoice-title">Edit Sales Receipt #{{ sale.id }}</h1>
+        <div class="invoice-details">
+            <p><strong>Date:</strong> {{ sale.date.strftime('%Y-%m-%d') }}</p>
+            <p><strong>Order ID:</strong> {{ sale.shipstation_order_id }}</p>
+        </div>
     </div>
     
     <form id="editSaleForm" method="POST" action="{{ url_for('edit_sale', id=sale.id) }}">
@@ -15,7 +17,7 @@
             <label for="date">Date:</label>
             <input type="datetime-local" id="date" name="date" value="{{ sale.date.strftime('%Y-%m-%dT%H:%M') }}" required>
         </div>
-        <div class="sale-info">
+        <div class="customer-info">
             <div class="form-group">
                 <label for="customer">Customer:</label>
                 <select id="customer" name="customer_id" required>
@@ -28,13 +30,13 @@
             </div>
         </div>
         
-        <div class="address-info">
+        <div class="customer-info">
             <div class="billing-address">
-                <h3>Billing Address</h3>
+                <p class="address-label">Billing Address:</p>
                 <textarea id="billing_address" name="billing_address" rows="4" readonly>{{ sale.customer.name + '\n' + sale.customer.billing_address }}</textarea>
             </div>
             <div class="shipping-address">
-                <h3>Shipping Address</h3>
+                <p class="address-label">Shipping Address:</p>
                 <textarea id="shipping_address" name="shipping_address" rows="4" readonly>{{ sale.customer.name + '\n' + sale.customer.shipping_address }}</textarea>
             </div>
         </div>
@@ -45,44 +47,60 @@
             <div id="lineItems">
                 {% for item in sale.line_items %}
                 <div class="line-item">
-                    <select name="product_id[]" class="product-select" required>
-                        {% for product in products %}
-                            <option value="{{ product.id }}" {% if product.id == item.product_id %}selected{% endif %}>
-                                {{ product.sku }} - {{ product.description }}
-                            </option>
-                        {% endfor %}
-                    </select>
-                    <input type="number" name="quantity[]" class="quantity" value="{{ item.quantity }}" min="1" required>
-                    <input type="number" name="price_each[]" class="price-each" value="{{ item.price_each }}" step="0.01" min="0" required>
-                    <input type="number" class="line-total" value="{{ item.total_price }}" readonly>
-                    <button type="button" class="btn btn-danger remove-line-item"><i class="fas fa-trash"></i></button>
+                    <div class="product-field">
+                        <label for="product_id">Product</label>
+                        <select name="product_id[]" class="product-select" required>
+                            {% for product in products %}
+                                <option value="{{ product.id }}" {% if product.id == item.product_id %}selected{% endif %}>
+                                    {{ product.sku }} - {{ product.description }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="quantity-field">
+                        <label for="quantity">Quantity</label>
+                        <input type="number" name="quantity[]" class="quantity" value="{{ item.quantity }}" min="1" required>
+                    </div>
+                    <div class="price-field">
+                        <label for="price_each">Price Each</label>
+                        <input type="number" name="price_each[]" class="price-each" value="{{ item.price_each }}" step="0.01" min="0" required>
+                    </div>
+                    <div class="total-field">
+                        <label for="line_total">Total Price</label>
+                        <input type="number" class="line-total" value="{{ item.total_price }}" readonly>
+                    </div>
+                    <div class="action-field">
+                        <button type="button" class="btn btn-danger remove-line-item"><i class="fas fa-trash"></i></button>
+                    </div>
                 </div>
                 {% endfor %}
             </div>
         </div>
         
         <div class="sale-summary">
-            <div class="form-group">
-                <label for="subtotal">Subtotal:</label>
-                <input type="number" id="subtotal" name="subtotal" value="{{ sale.total - sale.tax - sale.shipping }}" step="0.01" min="0" readonly>
-            </div>
-            <div class="form-group">
-                <label for="shipping">Shipping:</label>
-                <input type="number" id="shipping" name="shipping" value="{{ sale.shipping }}" step="0.01" min="0" required>
-            </div>
-            <div class="form-group">
-                <label for="tax">Tax:</label>
-                <input type="number" id="tax" name="tax" value="{{ sale.tax }}" step="0.01" min="0" required>
-            </div>
-            <div class="form-group">
-                <label for="total">Total:</label>
-                <input type="number" id="total" name="total" value="{{ sale.total }}" step="0.01" min="0" readonly>
-            </div>
+            <table class="summary-table">
+                <tr>
+                    <td>Subtotal:</td>
+                    <td><input type="number" id="subtotal" name="subtotal" value="{{ sale.total - sale.tax - sale.shipping }}" step="0.01" min="0" readonly></td>
+                </tr>
+                <tr>
+                    <td>Shipping:</td>
+                    <td><input type="number" id="shipping" name="shipping" value="{{ sale.shipping }}" step="0.01" min="0" required></td>
+                </tr>
+                <tr>
+                    <td>Tax:</td>
+                    <td><input type="number" id="tax" name="tax" value="{{ sale.tax }}" step="0.01" min="0" required></td>
+                </tr>
+                <tr class="total">
+                    <td>Total:</td>
+                    <td><input type="number" id="total" name="total" value="{{ sale.total }}" step="0.01" min="0" readonly></td>
+                </tr>
+            </table>
         </div>
         
         <div class="actions">
             <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Update Sale</button>
-            <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-times"></i> Cancel</a>
+            <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn btn-secondary"><i class="fas fa-times"></i> Cancel</a>
         </div>
     </form>
 </div>
@@ -168,5 +186,16 @@ $(document).ready(function() {
 
     updateLineTotals();
 });
+</script>
+
+<!-- Allow us to use select2 to filter the customer list -->
+<script>
+    $(document).ready(function() {
+        $('#customer').select2({
+            placeholder: 'Select a customer',
+            allowClear: true,
+            width: '400px'
+        });
+    });
 </script>
 {% endblock %}

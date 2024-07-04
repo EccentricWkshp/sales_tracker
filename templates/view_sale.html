@@ -4,28 +4,36 @@
 {% block title %}Sales Receipt #{{ sale.id }}{% endblock %}
 
 {% block content %}
-<div class="view-sale">
-    <h1>Sales Receipt #{{ sale.id }}</h1>
-    
-    <div class="sale-info">
-        <strong>Date:</strong> {{ sale.date.strftime('%m-%d-%Y') }}<br>
-        <strong>Customer:</strong> {{ sale.customer.name }} ({{ sale.customer.email }})
+<div class="view-sale edit-sale">
+    <div class="invoice-header">
+        <h1 class="invoice-title">Sales Receipt #{{ sale.id }}</h1>
+        <div class="invoice-details">
+            <p><strong>Date:</strong> {{ sale.date.strftime('%Y-%m-%d') }}</p>
+            <p><strong>Order ID:</strong> {{ sale.shipstation_order_id }}</p>
+        </div>
     </div>
-
-    <div class="address-info">
+    
+    <div class="customer-info">
+        <div class="customer-details">
+            <h3>Customer Information</h3>
+            <p><strong>Name:</strong> {{ sale.customer.name }}</p>
+            <p><strong>Email:</strong> {{ sale.customer.email }}</p>
+        </div>
+    </div>
+    
+    <div class="customer-info">
         <div class="billing-address">
             <h3>Billing Address</h3>
-            {{ sale.customer.name }}<br>
-            {{ sale.customer.billing_address | nl2br }}
+            <p>{{ sale.customer.billing_address | nl2br }}</p>
         </div>
         <div class="shipping-address">
             <h3>Shipping Address</h3>
-            {{ sale.customer.name }}<br>
-            {{ sale.customer.shipping_address | nl2br }}
+            <p>{{ sale.customer.shipping_address | nl2br }}</p>
         </div>
     </div>
 
     <div class="line-items">
+        <h3>Line Items</h3>
         <table>
             <thead>
                 <tr>
@@ -50,17 +58,31 @@
         </table>
     </div>
 
-    <div class="sale-summary" align="right">
-        <p><strong>Subtotal:</strong> ${{ "%.2f"|format(sale.total - sale.tax - sale.shipping) }}</p>
-        <p><strong>Tax:</strong> ${{ "%.2f"|format(sale.tax) }}</p>
-        <p><strong>Shipping:</strong> ${{ "%.2f"|format(sale.shipping) }}</p>
-        <p class="total"><strong>Total:</strong> ${{ "%.2f"|format(sale.total) }}</p>
+    <div class="sale-summary">
+        <table class="summary-table">
+            <tr>
+                <td>Subtotal:</td>
+                <td>${{ "%.2f"|format(sale.total - sale.tax - sale.shipping) }}</td>
+            </tr>
+            <tr>
+                <td>Shipping:</td>
+                <td>${{ "%.2f"|format(sale.shipping) }}</td>
+            </tr>
+            <tr>
+                <td>Tax:</td>
+                <td>${{ "%.2f"|format(sale.tax) }}</td>
+            </tr>
+            <tr class="total">
+                <td>Total:</td>
+                <td>${{ "%.2f"|format(sale.total) }}</td>
+            </tr>
+        </table>
     </div>
 
     <div class="actions">
         <a href="{{ url_for('edit_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit Sale</a>
         <a href="{{ url_for('print_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
-        <a href="{{ url_for('sales') }}" class="btn btn-primary"><i class="fas fa-arrow-left"></i> Back to Sales</a>
+        <a href="{{ url_for('sales') }}" class="btn btn-secondary"><i class="fas fa-arrow-left"></i> Back to Sales</a>
     </div>
 </div>
 {% endblock %}

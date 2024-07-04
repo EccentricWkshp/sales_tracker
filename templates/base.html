@@ -11,11 +11,20 @@
             Sales Management System
         {% endif %} Sales App{% endblock %}</title>
         
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">   
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cleave.js/1.6.0/cleave.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    
+    <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script> -->
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
 
+    <!-- Include Select2 CSS and JS -->
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
+    <!-- Include AG Grid -->
     <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-grid.css">
     <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-theme-alpine.css">
     <script src="https://unpkg.com/ag-grid-community/dist/ag-grid-community.min.noStyle.js"></script>
@@ -41,6 +50,7 @@
                 <ul>
                     <li><a href="{{ url_for('index') }}"><i class="fas fa-home"></i> Dashboard</a></li>
                     <li><a href="{{ url_for('sales') }}"><i class="fas fa-file-invoice-dollar"></i> Sales</a></li>
+                    <li><a href="{{ url_for('state_taxes') }}"><i class="fas fa-money-bill"></i>Taxes</a></li>
                     <li><a href="{{ url_for('customers') }}"><i class="fas fa-users"></i> Customers</a></li>
                     <li><a href="{{ url_for('products') }}"><i class="fas fa-box"></i> Products</a></li>
                     <li><a href="{{ url_for('management') }}"><i class="fas fa-cogs"></i> Management</a></li>
@@ -58,8 +68,6 @@
 
     {% block modal %}{% endblock %}
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>

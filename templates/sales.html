@@ -113,8 +113,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 suppressSizeToFit: true
             },
             {
-                headerName: "Date",
-                field: "date",
+                headerName: 'Date',
+                field: 'date',
                 filter: 'agDateColumnFilter',
                 comparator: dateComparator,
                 filterParams: {
@@ -161,7 +161,6 @@ document.addEventListener('DOMContentLoaded', function() {
             flex: 1,
             minWidth: 100,
             resizable: true,
-            accentedSort: true,
             comparator: caseInsensitiveComparator,
             filterParams: {
                 buttons: ["apply", "reset"],
@@ -457,5 +456,16 @@ $(document).ready(function() {
         });
     });
 });
+</script>
+
+<!-- Allow us to use select2 to filter the customer list -->
+<script>
+    $(document).ready(function() {
+        $('#customer').select2({
+            placeholder: 'Select a customer',
+            allowClear: true,
+            width: '400px'
+        });
+    });
 </script>
 {% endblock %}
