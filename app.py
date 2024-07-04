@@ -18,6 +18,7 @@ import requests
 from sqlalchemy import and_, extract, func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload
+import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
@@ -603,22 +604,38 @@ def fetch_shipstation_orders():
         return jsonify({'error': 'Start date and end date are required'}), 400
     
     api_url = 'https://ssapi.shipstation.com/orders'
-    params = {
-        'orderDateStart': start_date,
-        'orderDateEnd': end_date,
-        'orderStatus': 'shipped'
-    }
     
-    try:
-        response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
-        response.raise_for_status()
-    except requests.RequestException as e:
-        app.logger.error(f"Error fetching orders from ShipStation: {str(e)}")
-        return jsonify({'error': 'Error fetching orders from ShipStation'}), 500
-    
-    shipstation_orders = response.json()
-    
-    processed_orders = process_shipstation_data(shipstation_orders.get('orders', []))
+    all_orders = []
+    page = 1
+    page_size = 500  # Maximum allowed by ShipStation API
+
+    while True:
+        params = {
+            'orderDateStart': start_date,
+            'orderDateEnd': end_date,
+            'orderStatus': 'shipped',
+            'pageSize': page_size,
+            'page': page
+        }
+        
+        try:
+            response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
+            response.raise_for_status()
+            data = response.json()
+            
+            orders = data.get('orders', [])
+            all_orders.extend(orders)
+            
+            total_pages = data.get('pages', 1)
+            if page >= total_pages:
+                break
+            
+            page += 1
+        except requests.RequestException as e:
+            app.logger.error(f"Error fetching orders from ShipStation: {str(e)}")
+            return jsonify({'error': 'Error fetching orders from ShipStation'}), 500
+
+    processed_orders = process_shipstation_data(all_orders)
     
     orders_created = 0
     orders_updated = 0
@@ -630,17 +647,7 @@ def fetch_shipstation_orders():
         try:
             with db.session.begin_nested():
                 customer = get_or_create_customer(order['customer'])
-                if customer.id is None:
-                    customers_created += 1
-                else:
-                    customer.name = order['customer']['name']
-                    customer.company = order['customer']['company']
-                    customer.email = order['customer']['email']
-                    customer.phone = order['customer']['phone']
-                    customer.billing_address = format_address(order['customer'])
-                    customer.shipping_address = format_address(order['customer'])
-                    customers_updated += 1
-
+                
                 existing_sale = SalesReceipt.query.filter_by(shipstation_order_id=order['sales_receipt_number']).first()
                 
                 if existing_sale:
@@ -693,19 +700,58 @@ def fetch_shipstation_orders():
         error_msg = f'Error committing changes to database: {str(e)}'
         app.logger.error(error_msg)
         return jsonify({'error': error_msg}), 500
+def format_name(name):
+    if not name:
+        return 'Unknown'
+    
+    # Split the name into parts
+    parts = re.findall(r"[\w'-]+", name)
+    
+    # Capitalize each part properly
+    formatted_parts = []
+    for part in parts:
+        # Check if the part is an initial (single character)
+        if len(part) == 1:
+            formatted_parts.append(part.upper())
+        else:
+            # Capitalize the first letter, lowercase the rest
+            formatted_parts.append(part.capitalize())
+    
+    # Join the parts back together
+    return ' '.join(formatted_parts)
 
 def get_or_create_customer(customer_data):
-    customer = Customer.query.filter_by(email=customer_data['email']).first()
+    email = customer_data.get('email')
+    
+    if not email:
+        # Generate a unique placeholder email
+        placeholder_email = f"placeholder_{uuid.uuid4().hex}@example.com"
+        app.logger.warning(f"Missing customer email. Generated placeholder: {placeholder_email}")
+        email = placeholder_email
+
+    customer = Customer.query.filter_by(email=email).first()
+    
+    # Format the name
+    formatted_name = format_name(customer_data.get('name', 'Unknown'))
+    
     if not customer:
         customer = Customer(
-            name=customer_data['name'],
-            company=customer_data['company'],
-            email=customer_data['email'],
-            phone=customer_data['phone'],
+            name=formatted_name,
+            company=customer_data.get('company', ''),
+            email=email,
+            phone=customer_data.get('phone', ''),
             billing_address=format_address(customer_data),
             shipping_address=format_address(customer_data)
         )
         db.session.add(customer)
+    else:
+        # Update existing customer information
+        customer.name = formatted_name
+        customer.company = customer_data.get('company', customer.company)
+        customer.phone = customer_data.get('phone', customer.phone)
+        customer.billing_address = format_address(customer_data)
+        customer.shipping_address = format_address(customer_data)
+
     return customer
 
 def format_address(address_dict):
@@ -751,23 +797,23 @@ def get_state_name(state_code, country_code):
     return state_code
 
 def get_state_info(address):
-    print(f"Processing address: {address}")  # Debug print
+    #print(f"Processing address: {address}")  # Debug print
     
     address_parts = address.split('\n')
     if len(address_parts) < 2:
-        print("Address has fewer than 2 lines, returning 'Unknown'")  # Debug print
+        #print("Address has fewer than 2 lines, returning 'Unknown'")  # Debug print
         return 'Unknown'
 
     # Check if the last line is a country
     potential_country = address_parts[-1].strip()
     country = pycountry.countries.get(name=potential_country)
     if country:
-        print(f"Non-US address detected, country: {country.name}")  # Debug print
+        #print(f"Non-US address detected, country: {country.name}")  # Debug print
         return country.name
 
     # For US addresses, the state info should be in the last line
     state_country_line = address_parts[-1].strip()
-    print(f"State/country line: {state_country_line}")  # Debug print
+    #print(f"State/country line: {state_country_line}")  # Debug print
 
     # US address pattern: City, State ZIP
     us_pattern = r',\s*(\w{2})\s+\d{5}(-\d{4})?$'
@@ -794,7 +840,7 @@ def get_state_info(address):
         else:
             result = 'Unknown'
 
-    print(f"Extracted result: {result}")  # Debug print
+    #print(f"Extracted result: {result}")  # Debug print
     return result
 
 def format_items(line_items):
@@ -811,36 +857,38 @@ def process_shipstation_data(shipstation_orders):
 
     for order in shipstation_orders:
         try:
+            customer_data = {
+                'name': order['shipTo'].get('name', 'Unknown'),
+                'email': order.get('customerEmail'),  # This might be None
+                'company': order['shipTo'].get('company', ''),
+                'street1': order['shipTo'].get('street1', ''),
+                'street2': order['shipTo'].get('street2', ''),
+                'street3': order['shipTo'].get('street3', ''),
+                'city': order['shipTo'].get('city', ''),
+                'state': order['shipTo'].get('state', ''),
+                'postal_code': order['shipTo'].get('postalCode', ''),
+                'country': order['shipTo'].get('country', ''),
+                'phone': order['shipTo'].get('phone', ''),
+            }
+
             processed_order = {
                 'order_id': order['orderId'],
                 'sales_receipt_number': order['orderNumber'],
                 'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
-                'customer': {
-                    'name': title_capitalize(order['shipTo']['name']),
-                    'email': order['customerEmail'],
-                    'company': order['shipTo'].get('company', ''),
-                    'street1': order['shipTo']['street1'],
-                    'street2': order['shipTo'].get('street2', ''),
-                    'street3': order['shipTo'].get('street3', ''),
-                    'city': order['shipTo']['city'],
-                    'state': order['shipTo']['state'],
-                    'postal_code': order['shipTo']['postalCode'],
-                    'country': order['shipTo']['country'],
-                    'phone': order['shipTo']['phone'],
-                },
+                'customer': customer_data,
                 'items': [
                     {
-                        'sku': item['sku'],
-                        'name': item['name'],
-                        'quantity': item['quantity'],
-                        'unit_price': Decimal(str(item['unitPrice'])),
-                        'options': item['options'],
-                    } for item in order['items']
+                        'sku': item.get('sku', 'Unknown SKU'),
+                        'name': item.get('name', 'Unknown Item'),
+                        'quantity': item.get('quantity', 0),
+                        'unit_price': Decimal(str(item.get('unitPrice', '0'))),
+                        'options': item.get('options', []),
+                    } for item in order.get('items', [])
                 ],
-                'order_total': Decimal(str(order['orderTotal'])),
-                'amount_paid': Decimal(str(order['amountPaid'])),
-                'tax_amount': Decimal(str(order['taxAmount'])),
-                'shipping_amount': Decimal(str(order['shippingAmount'])),
+                'order_total': Decimal(str(order.get('orderTotal', '0'))),
+                'amount_paid': Decimal(str(order.get('amountPaid', '0'))),
+                'tax_amount': Decimal(str(order.get('taxAmount', '0'))),
+                'shipping_amount': Decimal(str(order.get('shippingAmount', '0'))),
             }
             processed_orders.append(processed_order)
         except Exception as e:
@@ -848,6 +896,7 @@ def process_shipstation_data(shipstation_orders):
             continue
 
     return processed_orders
+
 
 def parse_shipstation_date(date_str):
     # Split the string at the dot to separate the fractional seconds
