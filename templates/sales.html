@@ -159,6 +159,8 @@ document.addEventListener('DOMContentLoaded', function() {
             flex: 1,
             minWidth: 100,
             resizable: true,
+            accentedSort: true,
+            comparator: caseInsensitiveComparator,
             filterParams: {
                 buttons: ["apply", "reset"],
                 closeOnApply: true
@@ -170,6 +172,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     };
+
+    function caseInsensitiveComparator(valueA, valueB) {
+        if (valueA == null) return valueB == null ? 0 : -1;
+        if (valueB == null) return 1;
+        return valueA.toString().toLowerCase().localeCompare(valueB.toString().toLowerCase());
+    }
 
     var gridDiv = document.querySelector('#salesGrid');
     new agGrid.Grid(gridDiv, gridOptions);

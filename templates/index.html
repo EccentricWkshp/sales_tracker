@@ -103,12 +103,20 @@
                 flex: 1,
                 minWidth: 100,
                 resizable: true,
+                accentedSort: true,
+                comparator: caseInsensitiveComparator,
                 filterParams: {
                     buttons: ["apply", "reset"],
                     closeOnApply: true
                 }
             },
         };
+
+        function caseInsensitiveComparator(valueA, valueB) {
+            if (valueA == null) return valueB == null ? 0 : -1;
+            if (valueB == null) return 1;
+            return valueA.toString().toLowerCase().localeCompare(valueB.toString().toLowerCase());
+        }
         
         var gridDiv = document.querySelector('#recentSalesGrid');
         if (gridDiv && !gridDiv.gridInitialized) {
@@ -127,7 +135,10 @@
                 data: $(this).serialize(),
                 success: function(response) {
                     $('#shipstationResult').html('<div class="alert alert-success">' + response.message + '</div>');
-                    //location.reload();
+                    // Wait for a few seconds before reloading the page
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1500); // 3000 milliseconds = 3 seconds
                 },
                 error: function(xhr) {
                     var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
