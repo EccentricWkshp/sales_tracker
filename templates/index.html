@@ -53,6 +53,22 @@
             domLayout: "autoHeight",
             columnDefs: [
                 {
+                    headerName: '',
+                    field: 'print',
+                    cellRenderer: function(params) {
+                        return '<i class="fas fa-print text-primary" style="cursor: pointer;"></i>';
+                    },
+                    onCellClicked: function(params) {
+                        window.open("/sales/print/" + params.data.id, '_blank');
+                    },
+                    maxWidth: 40,
+                    sortable: false,
+                    filter: false,
+                    resizable: false,
+                    suppressAutoSize: true,
+                    suppressSizeToFit: true
+                },
+                {
                     headerName: "Date",
                     field: "date",
                     filter: 'agDateColumnFilter',
@@ -78,16 +94,7 @@
                     }
                 },
                 { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
-                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
-                {
-                    headerName: 'Actions',
-                    cellRenderer: function(params) {
-                        return `
-                            <a href="/sales/view/${params.data.id}" class="btn btn-primary"><i class="fas fa-eye"></i> View</a>
-                            <a href="/sales/print/${params.data.id}" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
-                        `;
-                    }, flex: 1
-                }
+                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 }
             ],
             rowData: [
                 {% for sale in recent_sales %}
@@ -110,6 +117,11 @@
                     closeOnApply: true
                 }
             },
+            onRowClicked: function(params) {
+                if (!params.event.target.classList.contains('fa-edit') && !params.event.target.classList.contains('fa-print')) {
+                    window.location.href = "/sales/view/" + params.data.id;
+                }
+            }
         };
 
         function caseInsensitiveComparator(valueA, valueB) {

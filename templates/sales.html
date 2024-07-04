@@ -103,7 +103,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     return '<i class="fas fa-print text-primary" style="cursor: pointer;"></i>';
                 },
                 onCellClicked: function(params) {
-                    window.location.href = "/sales/print/" + params.data.id;
+                    window.open("/sales/print/" + params.data.id, '_blank');
                 },
                 maxWidth: 40,
                 sortable: false,
@@ -169,7 +169,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         },
         onRowClicked: function(params) {
-            if (!params.event.target.classList.contains('delete-sale') && !params.event.target.classList.contains('fa-edit')) {
+            if (!params.event.target.classList.contains('delete-sale') && !params.event.target.classList.contains('fa-edit') && !params.event.target.classList.contains('fa-print')) {
                 window.location.href = "/sales/view/" + params.data.id;
             }
         }
