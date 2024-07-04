@@ -10,7 +10,7 @@
     <div class="summary-cards">
         <div class="card">
             <h2>Total Revenue</h2>
-            <p class="large-number">${{ "%.2f"|format(total_revenue) }}</p>
+            <p class="large-number">${{ "{:,.2f}".format(total_revenue) }}</p>
         </div>
         <div class="card">
             <h2>Total Sales</h2>
@@ -42,33 +42,82 @@
 
     <div class="recent-sales">
         <h2>Recent Sales</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Date</th>
-                    <th>Customer</th>
-                    <th>Total</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for sale in recent_sales %}
-                <tr>
-                    <td>{{ sale.date.strftime('%m-%d-%Y') }}</td>
-                    <td>{{ sale.customer.name }}</td>
-                    <td>${{ "%.2f"|format(sale.total) }}</td>
-                    <td>
-                        <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-eye"></i> View</a>
-                        <a href="{{ url_for('print_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+        
+        <div id="recentSalesGrid" class="ag-theme-alpine" style="width: 100%;"></div>
     
     {% block extra_scripts %}
     <script>
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        var gridOptions = {
+            domLayout: "autoHeight",
+            columnDefs: [
+                {
+                    headerName: "Date",
+                    field: "date",
+                    filter: 'agDateColumnFilter',
+                    filterParams: {
+                        comparator: function(filterLocalDateAtMidnight, cellValue) {
+                            var dateParts = cellValue.split('-');
+                            var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
+
+                            if (cellDate < filterLocalDateAtMidnight) {
+                                return -1;
+                            } else if (cellDate > filterLocalDateAtMidnight) {
+                                return 1;
+                            } else {
+                                return 0;
+                            }
+                        },
+                        buttons: ["apply", "reset"],
+                        closeOnApply: true
+                    },
+                    valueFormatter: function(params) {
+                        var dateParts = params.value.split('-');
+                        return `${dateParts[0]}-${dateParts[1]}-${dateParts[2]}`;
+                    }
+                },
+                { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
+                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
+                {
+                    headerName: 'Actions',
+                    cellRenderer: function(params) {
+                        return `
+                            <a href="/sales/view/${params.data.id}" class="btn btn-primary"><i class="fas fa-eye"></i> View</a>
+                            <a href="/sales/print/${params.data.id}" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
+                        `;
+                    }, flex: 1
+                }
+            ],
+            rowData: [
+                {% for sale in recent_sales %}
+                {
+                    id: {{ sale.id }},
+                    date: '{{ sale.date.strftime('%m-%d-%Y') }}',
+                    customer: '{{ sale.customer.name }}',
+                    total: '{{ "%.2f"|format(sale.total) }}'
+                },
+                {% endfor %}
+            ],
+            defaultColDef: {
+                flex: 1,
+                minWidth: 100,
+                resizable: true,
+                filterParams: {
+                    buttons: ["apply", "reset"],
+                    closeOnApply: true
+                }
+            },
+        };
+        
+        var gridDiv = document.querySelector('#recentSalesGrid');
+        if (gridDiv && !gridDiv.gridInitialized) {
+            new agGrid.Grid(gridDiv, gridOptions);
+            gridDiv.gridInitialized = true;
+        }
+
+    });
+
     $(document).ready(function() {
         $('#shipstationForm').submit(function(e) {
             e.preventDefault();

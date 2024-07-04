@@ -6,37 +6,7 @@
 {% block content %}
 <h1>Sales</h1>
 <button id="addSaleBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Sale</button>
-<table>
-    <thead>
-        <tr>
-            <th>Date</th>
-            <th>Receipt #</th>
-            <th>Customer</th>
-            <th>Total</th>
-            <th>Tax</th>
-            <th>Shipping</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for sale in sales %}
-        <tr>
-            <td>{{ sale.date.strftime('%m-%d-%Y') }}</td>
-            <td>{{ sale.shipstation_order_id }}</td>
-            <td>{{ sale.customer.name if sale.customer else 'N/A' }}</td>
-            <td>${{ "%.2f"|format(sale.total) }}</td>
-            <td>${{ "%.2f"|format(sale.tax) }}</td>
-            <td>${{ "%.2f"|format(sale.shipping) }}</td>
-            <td>
-                <a href="{{ url_for('edit_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit</a>
-                <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-eye"></i> View</a>
-                <a href="{{ url_for('print_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
-                <button class="btn btn-danger delete-sale" data-id="{{ sale.id }}"><i class="fas fa-trash"></i> Delete</button>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+<div id="salesGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
 {% endblock %}
 
 {% block modal %}
@@ -70,7 +40,7 @@
                 </div>
                 <div class="form-group">
                     <label for="shipping">Shipping</label>
-                    <input type="text" id="shipping" name="shipping" required>
+                    <input type="text" id="shipping" name="shipping" value="$0.00">
                 </div>
                 <div class="form-group">
                     <label for="total">Total</label>
@@ -84,7 +54,142 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cleave.js/1.6.0/cleave.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {    
+    var gridOptions = {
+        autoSizeStrategy: {
+            type: "fitCellContents",
+        },
+        columnDefs: [
+            {
+                headerName: '',
+                field: 'delete',
+                cellRenderer: function(params) {
+                    return '<i class="fas fa-trash text-danger delete-sale" style="cursor: pointer;"></i>';
+                },
+                onCellClicked: function(params) {
+                    if (confirm("Are you sure you want to delete this sale?")) {
+                        deleteSale(params.data.id);
+                    }
+                },
+                maxWidth: 40,
+                sortable: false,
+                filter: false,
+                resizable: false,
+                suppressAutoSize: true,
+                suppressSizeToFit: true
+            },
+            {
+                headerName: '',
+                field: 'edit',
+                cellRenderer: function(params) {
+                    return '<i class="fas fa-edit text-primary" style="cursor: pointer;"></i>';
+                },
+                onCellClicked: function(params) {
+                    window.location.href = "/sales/edit/" + params.data.id;
+                },
+                maxWidth: 40,
+                sortable: false,
+                filter: false,
+                resizable: false,
+                suppressAutoSize: true,
+                suppressSizeToFit: true
+            },
+            {
+                headerName: '',
+                field: 'print',
+                cellRenderer: function(params) {
+                    return '<i class="fas fa-print text-primary" style="cursor: pointer;"></i>';
+                },
+                onCellClicked: function(params) {
+                    window.location.href = "/sales/print/" + params.data.id;
+                },
+                maxWidth: 40,
+                sortable: false,
+                filter: false,
+                resizable: false,
+                suppressAutoSize: true,
+                suppressSizeToFit: true
+            },
+            {
+                headerName: "Date",
+                field: "date",
+                filter: 'agDateColumnFilter',
+                filterParams: {
+                    comparator: function(filterLocalDateAtMidnight, cellValue) {
+                        var dateParts = cellValue.split('-');
+                        var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
+
+                        if (cellDate < filterLocalDateAtMidnight) {
+                            return -1;
+                        } else if (cellDate > filterLocalDateAtMidnight) {
+                            return 1;
+                        } else {
+                            return 0;
+                        }
+                    },
+                    buttons: ["apply", "reset"],
+                    closeOnApply: true
+                },
+                valueFormatter: function(params) {
+                    var dateParts = params.value.split('-');
+                    return `${dateParts[0]}-${dateParts[1]}-${dateParts[2]}`;
+                }
+            },
+            { headerName: 'Receipt #', field: 'receipt', sortable: true, filter: true },
+            { headerName: 'Customer', field: 'customer', sortable: true, filter: true },
+            { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true },
+            { headerName: 'Tax', field: 'tax', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true },
+            { headerName: 'Shipping', field: 'shipping', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true }
+        ],
+        rowData: [
+            {% for sale in sales %}
+            {
+                id: {{ sale.id }},
+                date: '{{ sale.date.strftime('%m-%d-%Y') }}',
+                receipt: '{{ sale.shipstation_order_id }}',
+                customer: '{{ sale.customer.name if sale.customer else 'N/A' }}',
+                total: '{{ "%.2f"|format(sale.total) }}',
+                tax: '{{ "%.2f"|format(sale.tax) }}',
+                shipping: '{{ "%.2f"|format(sale.shipping) }}'
+            },
+            {% endfor %}
+        ],
+        defaultColDef: {
+            flex: 1,
+            minWidth: 100,
+            resizable: true,
+            filterParams: {
+                buttons: ["apply", "reset"],
+                closeOnApply: true
+            }
+        },
+        onRowClicked: function(params) {
+            if (!params.event.target.classList.contains('delete-sale') && !params.event.target.classList.contains('fa-edit')) {
+                window.location.href = "/sales/view/" + params.data.id;
+            }
+        }
+    };
+
+    var gridDiv = document.querySelector('#salesGrid');
+    new agGrid.Grid(gridDiv, gridOptions);
+});
+
+function deleteSale(saleId) {
+    $.ajax({
+        url: "/sales/delete/" + saleId,
+        method: "POST",
+        success: function(response) {
+            if (response.success) {
+                location.reload();
+            } else {
+                alert("Error deleting sale");
+            }
+        }
+    });
+}
+</script>
+
 <script>
 $(document).ready(function() {
     var modal = $("#saleModal");
@@ -146,23 +251,6 @@ $(document).ready(function() {
             updateTotals();
             modal.show();
         });
-    });
-
-    $(".delete-sale").click(function() {
-        var saleId = $(this).data("id");
-        if (confirm("Are you sure you want to delete this sale?")) {
-            $.ajax({
-                url: "/sales/delete/" + saleId,
-                method: "POST",
-                success: function(response) {
-                    if (response.success) {
-                        location.reload();
-                    } else {
-                        alert("Error deleting sale");
-                    }
-                }
-            });
-        }
     });
 
     closeBtn.click(function() {

@@ -3,34 +3,10 @@
 
 {% block title %}Products{% endblock %}
 
-{% block header %}Products{% endblock %}
-
 {% block content %}
 <h1>Products</h1>
 <button id="addProductBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Product</button>
-<table>
-    <thead>
-        <tr>
-            <th>SKU</th>
-            <th>Description</th>
-            <th>Price</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for product in products %}
-        <tr>
-            <td>{{ product.sku }}</td>
-            <td>{{ product.description }}</td>
-            <td>${{ "%.2f"|format(product.price) }}</td>
-            <td>
-                <button class="btn btn-primary edit-product" data-id="{{ product.id }}"><i class="fas fa-edit"></i> Edit</button>
-                <button class="btn btn-danger delete-product" data-id="{{ product.id }}"><i class="fas fa-trash"></i> Delete</button>
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+<div id="productsGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
 {% endblock %}
 
 {% block modal %}
@@ -59,91 +35,156 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cleave.js/1.6.0/cleave.min.js"></script>
 <script>
-$(document).ready(function() {
-    var modal = $("#productModal");
-    var addBtn = $("#addProductBtn");
-    var closeBtn = $(".close");
-    var form = $("#productForm");
+    document.addEventListener('DOMContentLoaded', function() {
+        var gridOptions = {
+            autoSizeStrategy: {
+                type: "fitCellContents",
+            },
+            columnDefs: [
+                {
+                    headerName: '',
+                    field: 'delete',
+                    cellRenderer: function(params) {
+                        return '<i class="fas fa-trash text-danger delete-product" style="cursor: pointer;"></i>';
+                    },
+                    onCellClicked: function(params) {
+                        if (confirm("Are you sure you want to delete this product?")) {
+                            deleteProduct(params.data.id);
+                        }
+                    },
+                    maxWidth: 40,
+                    sortable: false,
+                    filter: false,
+                    resizable: false,
+                    suppressAutoSize: true,
+                    suppressSizeToFit: true
+                },
+                {
+                    headerName: '',
+                    field: 'edit',
+                    cellRenderer: function(params) {
+                        return '<i class="fas fa-edit text-primary edit-product" style="cursor: pointer;"></i>';
+                    },
+                    onCellClicked: function(params) {
+                        editProduct(params.data.id);
+                    },
+                    maxWidth: 40,
+                    sortable: false,
+                    filter: false,
+                    resizable: false,
+                    suppressAutoSize: true,
+                    suppressSizeToFit: true
+                },
+                { headerName: 'SKU', field: 'sku', sortable: true, sort: 'asc', filter: true },
+                { headerName: 'Description', field: 'description', sortable: true, filter: true },
+                { headerName: 'Price', field: 'price', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true }
+            ],
+            rowData: [
+                {% for product in products %}
+                {
+                    id: {{ product.id }},
+                    sku: '{{ product.sku }}',
+                    description: '{{ product.description }}',
+                    price: '{{ "%.2f"|format(product.price) }}'
+                },
+                {% endfor %}
+            ],
+            defaultColDef: {
+                flex: 1,
+                minWidth: 100,
+                resizable: true,
+                filterParams: {
+                    buttons: ["apply", "reset"],
+                    closeOnApply: true
+                }
+            }
+        };
 
-    // Initialize Cleave.js for price formatting
-    var cleave = new Cleave('#price', {
-        numeral: true,
-        numeralThousandsGroupStyle: 'thousand',
-        prefix: '$',
-        rawValueTrimPrefix: true
+        var gridDiv = document.querySelector('#productsGrid');
+        new agGrid.Grid(gridDiv, gridOptions);
     });
 
-    addBtn.click(function() {
-        $("#modalTitle").text("Add Product");
-        form[0].reset();
-        $("#productId").val("");
-        cleave.setRawValue('');
-        modal.show();
-    });
+    function deleteProduct(productId) {
+        $.ajax({
+            url: "/products/delete/" + productId,
+            method: "POST",
+            success: function(response) {
+                if (response.success) {
+                    location.reload();
+                } else {
+                    alert("Error deleting product");
+                }
+            }
+        });
+    }
 
-    $(".edit-product").click(function() {
-        var productId = $(this).data("id");
+    function editProduct(productId) {
+        // Implement edit functionality (e.g., open modal)
         $("#modalTitle").text("Edit Product");
         $.get("/products/get/" + productId, function(data) {
             $("#productId").val(data.id);
             $("#sku").val(data.sku);
             $("#description").val(data.description);
-            cleave.setRawValue(data.price);
+            $("#price").val(('$' + data.price.toFixed(2).replace(/\B(?=(?:\d{3})+(?!\d))/g, ',')));
+            $("#productModal").show();
+        });
+    }
+
+    $(document).ready(function() {
+        var modal = $("#productModal");
+        var addBtn = $("#addProductBtn");
+        var closeBtn = $(".close");
+        var form = $("#productForm");
+    
+        // Initialize Cleave.js for price formatting
+        var cleave = new Cleave('#price', {
+            numeral: true,
+            numeralThousandsGroupStyle: 'thousand',
+            prefix: '$',
+            rawValueTrimPrefix: true
+        });
+    
+        addBtn.click(function() {
+            $("#modalTitle").text("Add Product");
+            form[0].reset();
+            $("#productId").val("");
+            cleave.setRawValue('');
             modal.show();
         });
-    });
-
-    $(".delete-product").click(function() {
-        var productId = $(this).data("id");
-        if (confirm("Are you sure you want to delete this product?")) {
+    
+        closeBtn.click(function() {
+            modal.hide();
+        });
+    
+        $(window).click(function(event) {
+            if (event.target == modal[0]) {
+                modal.hide();
+            }
+        });
+    
+        form.submit(function(e) {
+            e.preventDefault();
+            var url = $("#productId").val() ? "/products/edit/" + $("#productId").val() : "/products/add";
             $.ajax({
-                url: "/products/delete/" + productId,
+                url: url,
                 method: "POST",
+                data: JSON.stringify({
+                    sku: $("#sku").val(),
+                    description: $("#description").val(),
+                    price: cleave.getRawValue()
+                }),
+                contentType: "application/json",
                 success: function(response) {
                     if (response.success) {
+                        modal.hide();
                         location.reload();
                     } else {
-                        alert("Error deleting product");
+                        alert("Error saving product");
                     }
                 }
             });
-        }
-    });
-
-    closeBtn.click(function() {
-        modal.hide();
-    });
-
-    $(window).click(function(event) {
-        if (event.target == modal[0]) {
-            modal.hide();
-        }
-    });
-
-    form.submit(function(e) {
-        e.preventDefault();
-        var url = $("#productId").val() ? "/products/edit/" + $("#productId").val() : "/products/add";
-        $.ajax({
-            url: url,
-            method: "POST",
-            data: JSON.stringify({
-                sku: $("#sku").val(),
-                description: $("#description").val(),
-                price: cleave.getRawValue()
-            }),
-            contentType: "application/json",
-            success: function(response) {
-                if (response.success) {
-                    modal.hide();
-                    location.reload();
-                } else {
-                    alert("Error saving product");
-                }
-            }
         });
     });
-});
-</script>
+    </script>
 {% endblock %}
