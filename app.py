@@ -10,6 +10,8 @@ from flask_sqlalchemy import SQLAlchemy
 import logging
 from markupsafe import Markup
 import os
+import pycountry
+import pycountry_convert as pc
 import pytz
 import requests
 from sqlalchemy import func
@@ -86,6 +88,7 @@ class CompanyInfo(db.Model):
 class Customer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
+    company = db.Column(db.String(100))
     email = db.Column(db.String(120), unique=True, nullable=False)
     billing_address = db.Column(db.String(200), nullable=False)
     shipping_address = db.Column(db.String(200), nullable=False)
@@ -244,7 +247,9 @@ def add_customer():
     data = request.json
     new_customer = Customer(
         name=data['name'],
+        company=data['company'],
         email=data['email'],
+        phone=data['phone'],
         billing_address=data['billing_address'],
         shipping_address=data['shipping_address']
     )
@@ -258,7 +263,9 @@ def edit_customer(id):
     customer = Customer.query.get_or_404(id)
     data = request.json
     customer.name = data['name']
+    customer.company = data['company']
     customer.email = data['email']
+    customer.phone = data['phone']
     customer.billing_address = data['billing_address']
     customer.shipping_address = data['shipping_address']
     db.session.commit()
@@ -271,7 +278,9 @@ def get_customer(id):
     return jsonify({
         'id': customer.id,
         'name': customer.name,
+        'company': customer.company,
         'email': customer.email,
+        'phone': customer.phone,
         'billing_address': customer.billing_address,
         'shipping_address': customer.shipping_address
     })
@@ -280,9 +289,20 @@ def get_customer(id):
 @login_required
 def delete_customer(id):
     customer = Customer.query.get_or_404(id)
-    db.session.delete(customer)
-    db.session.commit()
-    return jsonify({'success': True})
+    #db.session.delete(customer)
+    #db.session.commit()
+    #return jsonify({'success': True})
+
+    try:
+        db.session.delete(customer)
+        db.session.commit()
+        return jsonify({"success": f"Deleted {customer.name}"}), 200
+    except IntegrityError:
+        db.session.rollback()
+        app.logger.error(f"Error deleting customer: {customer.name}")
+        return jsonify({"error": f"Cannot delete {customer.name}: associated sales receipts"}), 400
+        
+
 
 @app.route('/products')
 @login_required
@@ -383,6 +403,9 @@ def get_sale(id):
         'shipstation_order_id': sale.shipstation_order_id,
         'customer_id': sale.customer_id,
         'customer_name': sale.customer.name,
+        'customer_email': sale.customer_email,
+        'customer_phone': sale.customer_phone,
+        'customer_company': sale.customer.company,
         'date': sale.date.strftime('%m-%d-%Y'),
         'subtotal': float(sale.total - sale.tax - sale.shipping),
         'tax': float(sale.tax),
@@ -451,7 +474,8 @@ def edit_sale(id):
     # For GET requests, render the edit form
     customers = Customer.query.all()
     products = Product.query.all()
-    return render_template('edit_sale.html', sale=sale, customers=customers, products=products)
+    company_info = CompanyInfo.get_info()
+    return render_template('edit_sale.html', sale=sale, customers=customers, products=products, company_info=company_info)
 
 @app.route('/sales/view/<int:id>')
 @login_required
@@ -460,7 +484,10 @@ def view_sale(id):
         joinedload(SalesReceipt.customer),
         joinedload(SalesReceipt.line_items).joinedload(LineItem.product)
     ).get_or_404(id)
-    return render_template('view_sale.html', sale=sale)
+
+    company_info = CompanyInfo.get_info()
+
+    return render_template('view_sale.html', sale=sale, company_info=company_info)
 
 @app.route('/sales/delete/<int:id>', methods=['POST'])
 @login_required
@@ -536,42 +563,50 @@ def fetch_shipstation_orders():
     orders_created = 0
     orders_updated = 0
     customers_created = 0
+    customers_updated = 0
     errors = []
 
     for order in processed_orders:
         try:
-            customer = get_or_create_customer(order['customer'])
-            if customer.id is None:
-                customers_created += 1
+            with db.session.begin_nested():
+                customer = get_or_create_customer(order['customer'])
+                if customer.id is None:
+                    customers_created += 1
+                else:
+                    customer.name = order['customer']['name']
+                    customer.company = order['customer']['company']
+                    customer.email = order['customer']['email']
+                    customer.phone = order['customer']['phone']
+                    customer.billing_address = format_address(order['customer'])
+                    customer.shipping_address = format_address(order['customer'])
+                    customers_updated += 1
 
-            existing_sale = SalesReceipt.query.filter_by(id=order['order_id']).first()
-            
-            if existing_sale:
-                # Update existing sale
-                existing_sale.shipstation_order_id = order['sales_receipt_number']
-                existing_sale.customer_id = customer.id
-                existing_sale.date = order['sales_receipt_date']
-                existing_sale.total = order['order_total']
-                existing_sale.tax = order['tax_amount']
-                existing_sale.shipping = order['shipping_amount']
-                orders_updated += 1
-            else:
-                # Create a new sale
-                new_sale = SalesReceipt(
-                    customer_id=customer.id,
-                    date=order['sales_receipt_date'],
-                    total=order['order_total'],
-                    tax=order['tax_amount'],
-                    shipping=order['shipping_amount'],
-                    id=order['order_id'],
-                    shipstation_order_id=order['sales_receipt_number']
-                )
-                db.session.add(new_sale)
-                orders_created += 1
-            
-            # Process line items
-            sale = existing_sale or new_sale
-            process_line_items(sale, order['items'])
+                existing_sale = SalesReceipt.query.filter_by(shipstation_order_id=order['sales_receipt_number']).first()
+                
+                if existing_sale:
+                    # Update existing sale
+                    existing_sale.customer_id = customer.id
+                    existing_sale.date = order['sales_receipt_date']
+                    existing_sale.total = order['order_total']
+                    existing_sale.tax = order['tax_amount']
+                    existing_sale.shipping = order['shipping_amount']
+                    orders_updated += 1
+                else:
+                    # Create a new sale
+                    new_sale = SalesReceipt(
+                        customer_id=customer.id,
+                        date=order['sales_receipt_date'],
+                        total=order['order_total'],
+                        tax=order['tax_amount'],
+                        shipping=order['shipping_amount'],
+                        shipstation_order_id=order['sales_receipt_number']
+                    )
+                    db.session.add(new_sale)
+                    orders_created += 1
+                
+                # Process line items
+                sale = existing_sale or new_sale
+                process_line_items(sale, order['items'])
 
         except Exception as e:
             db.session.rollback()
@@ -584,7 +619,7 @@ def fetch_shipstation_orders():
         db.session.commit()
         message = (f'Successfully processed {len(processed_orders)} orders from ShipStation. '
                    f'Created {orders_created} new orders, updated {orders_updated} existing orders, '
-                   f'and added {customers_created} new customers.')
+                   f'created {customers_created} new customers, and updated {customers_updated} existing customers.')
         if errors:
             message += f' Encountered {len(errors)} errors.'
         
@@ -604,6 +639,7 @@ def get_or_create_customer(customer_data):
     if not customer:
         customer = Customer(
             name=customer_data['name'],
+            company=customer_data['company'],
             email=customer_data['email'],
             phone=customer_data['phone'],
             billing_address=format_address(customer_data),
@@ -613,53 +649,87 @@ def get_or_create_customer(customer_data):
     return customer
 
 def format_address(address_dict):
-    return f"{address_dict['name']}, " \
-           f"{address_dict['street1']}, " \
-           f"{address_dict['street2']}, " \
-           f"{address_dict['street3']}, " \
-           f"{address_dict['city']}, " \
-           f"{address_dict['state']} " \
-           f"{address_dict['postal_code']}, " \
-           f"{address_dict['country']}".replace(', ,', ',').strip(', ')
+    country_code = address_dict.get('country', '')
+    state_code = address_dict.get('state', '')
+    country_full = get_country_name(country_code)
+
+    if country_code == 'US':
+        # Keep the state as abbreviation for US
+        state_full = state_code
+        country_full = ''  # Drop the country name for US addresses
+    else:
+        state_full = get_state_name(state_code, country_code)
+
+    # Combine the address parts with proper capitalization
+    address_parts = [
+        title_capitalize(address_dict.get('street1', '')),
+        title_capitalize(address_dict.get('street2', '')),
+        title_capitalize(address_dict.get('street3', '')),
+        f"{title_capitalize(address_dict.get('city', ''))}, {state_full} {address_dict.get('postal_code', '')}",
+        country_full
+    ]
+
+    # Filter out empty parts and join with newlines
+    formatted_address = '\n'.join(part for part in address_parts if part).strip()
+
+    return formatted_address
+
+def title_capitalize(part):
+    if part:
+        return part.title()
+    return part
+
+def get_country_name(country_code):
+    country = pycountry.countries.get(alpha_2=country_code)
+    return country.name if country else country_code
+
+def get_state_name(state_code, country_code):
+    subdivisions = pycountry.subdivisions.get(country_code=country_code)
+    for subdivision in subdivisions:
+        if subdivision.code.split('-')[-1] == state_code:
+            return subdivision.name
+    return state_code
 
 def process_shipstation_data(shipstation_orders):
     processed_orders = []
 
     for order in shipstation_orders:
-
-        processed_order = {
-            'order_id': order['orderId'],
-            'sales_receipt_number': order['orderNumber'],
-            'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
-            #'ship_date': parse_shipstation_date(order['shipDate']),
-            'customer': {
-                'name': order['shipTo']['name'],
-                'email': order['customerEmail'],
-                'company': order['shipTo'].get('company', ''),
-                'street1': order['shipTo']['street1'],
-                'street2': order['shipTo'].get('street2', ''),
-                'street3': order['shipTo'].get('street3', ''),
-                'city': order['shipTo']['city'],
-                'state': order['shipTo']['state'],
-                'postal_code': order['shipTo']['postalCode'],
-                'country': order['shipTo']['country'],
-                'phone': order['shipTo']['phone'],
-            },
-            'items': [
-                {
-                    'sku': item['sku'],
-                    'name': item['name'],
-                    'quantity': item['quantity'],
-                    'unit_price': Decimal(str(item['unitPrice'])),
-                    'options': item['options'],
-                } for item in order['items']
-            ],
-            'order_total': Decimal(str(order['orderTotal'])),
-            'amount_paid': Decimal(str(order['amountPaid'])),
-            'tax_amount': Decimal(str(order['taxAmount'])),
-            'shipping_amount': Decimal(str(order['shippingAmount'])),
-        }
-        processed_orders.append(processed_order)
+        try:
+            processed_order = {
+                'order_id': order['orderId'],
+                'sales_receipt_number': order['orderNumber'],
+                'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
+                'customer': {
+                    'name': title_capitalize(order['shipTo']['name']),
+                    'email': order['customerEmail'],
+                    'company': order['shipTo'].get('company', ''),
+                    'street1': order['shipTo']['street1'],
+                    'street2': order['shipTo'].get('street2', ''),
+                    'street3': order['shipTo'].get('street3', ''),
+                    'city': order['shipTo']['city'],
+                    'state': order['shipTo']['state'],
+                    'postal_code': order['shipTo']['postalCode'],
+                    'country': order['shipTo']['country'],
+                    'phone': order['shipTo']['phone'],
+                },
+                'items': [
+                    {
+                        'sku': item['sku'],
+                        'name': item['name'],
+                        'quantity': item['quantity'],
+                        'unit_price': Decimal(str(item['unitPrice'])),
+                        'options': item['options'],
+                    } for item in order['items']
+                ],
+                'order_total': Decimal(str(order['orderTotal'])),
+                'amount_paid': Decimal(str(order['amountPaid'])),
+                'tax_amount': Decimal(str(order['taxAmount'])),
+                'shipping_amount': Decimal(str(order['shippingAmount'])),
+            }
+            processed_orders.append(processed_order)
+        except Exception as e:
+            app.logger.error(f"Error processing ShipStation order {order.get('orderId', 'Unknown')}: {str(e)}")
+            continue
 
     return processed_orders
 
