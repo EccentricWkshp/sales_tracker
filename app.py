@@ -13,8 +13,9 @@ import os
 import pycountry
 import pycountry_convert as pc
 import pytz
+import re
 import requests
-from sqlalchemy import func
+from sqlalchemy import and_, extract, func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -232,6 +233,65 @@ def management():
         return redirect(url_for('management'))
 
     return render_template('management.html', company_info=company_info, shipstation_credentials=shipstation_credentials)
+
+@app.route('/state_taxes')
+@login_required
+def state_taxes():
+    sales = SalesReceipt.query.options(joinedload(SalesReceipt.customer)).all()
+    sorted_sales = sorted(sales, key=lambda sale: sale.date, reverse=True)
+
+    company_info = CompanyInfo.get_info()
+    
+    return render_template('state_taxes.html', sales=sorted_sales, company_info=company_info)
+
+@app.route('/api/state_taxes_data')
+@login_required
+def get_state_taxes_data():
+    year = request.args.get('year', type=int)
+    quarter = request.args.get('quarter')
+    start = request.args.get('start', type=int, default=0)
+    end = request.args.get('end', type=int, default=100)
+
+    # Define date ranges for quarters
+    date_ranges = {
+        'Q1': (f'{year}-01-01', f'{year}-03-31'),
+        'Q2': (f'{year}-04-01', f'{year}-06-30'),
+        'Q3': (f'{year}-07-01', f'{year}-09-30'),
+        'Q4': (f'{year}-10-01', f'{year}-12-31'),
+    }
+
+    start_date, end_date = date_ranges.get(quarter, ('', ''))
+
+    query = SalesReceipt.query.filter(
+        SalesReceipt.date.between(start_date, end_date)
+    ).options(
+        joinedload(SalesReceipt.customer),
+        joinedload(SalesReceipt.line_items).joinedload(LineItem.product)
+    )
+
+    total_count = query.count()
+    sales = query.offset(start).limit(end - start).all()
+
+    data = []
+    for sale in sales:
+        manufacturing = sum(item.total_price for item in sale.line_items if item.product.sku.endswith('A'))
+        retail = sum(item.total_price for item in sale.line_items)
+        items = format_items(sale.line_items)
+
+        data.append({
+            'date': sale.date.strftime('%Y-%m-%d'),
+            'name': sale.customer.name,
+            'state': get_state_info(sale.customer.shipping_address),
+            'manufacturing': float(manufacturing),
+            'retail': float(retail),
+            'shipping': float(sale.shipping),
+            'items': items
+        })
+
+    return jsonify({
+        'rows': data,
+        'lastRow': total_count
+    })
 
 @app.route('/customers')
 @login_required
@@ -689,6 +749,62 @@ def get_state_name(state_code, country_code):
         if subdivision.code.split('-')[-1] == state_code:
             return subdivision.name
     return state_code
+
+def get_state_info(address):
+    print(f"Processing address: {address}")  # Debug print
+    
+    address_parts = address.split('\n')
+    if len(address_parts) < 2:
+        print("Address has fewer than 2 lines, returning 'Unknown'")  # Debug print
+        return 'Unknown'
+
+    # Check if the last line is a country
+    potential_country = address_parts[-1].strip()
+    country = pycountry.countries.get(name=potential_country)
+    if country:
+        print(f"Non-US address detected, country: {country.name}")  # Debug print
+        return country.name
+
+    # For US addresses, the state info should be in the last line
+    state_country_line = address_parts[-1].strip()
+    print(f"State/country line: {state_country_line}")  # Debug print
+
+    # US address pattern: City, State ZIP
+    us_pattern = r',\s*(\w{2})\s+\d{5}(-\d{4})?$'
+    us_match = re.search(us_pattern, state_country_line)
+
+    if us_match:
+        state = us_match.group(1)
+        if state == 'WA':
+            # For Washington, return City, State, ZIP
+            city_match = re.match(r'^(.+),', state_country_line)
+            city = city_match.group(1) if city_match else 'Unknown City'
+            zip_match = re.search(r'(\d{5}(-\d{4})?)$', state_country_line)
+            zip_code = zip_match.group(1) if zip_match else 'Unknown ZIP'
+            result = f"{city}, WA, {zip_code}"
+        else:
+            result = state
+    else:
+        # If it doesn't match US pattern, check each line for a country name
+        for line in reversed(address_parts):
+            country = pycountry.countries.get(name=line.strip())
+            if country:
+                result = country.name
+                break
+        else:
+            result = 'Unknown'
+
+    print(f"Extracted result: {result}")  # Debug print
+    return result
+
+def format_items(line_items):
+    formatted_items = []
+    for item in line_items:
+        if item.quantity > 1:
+            formatted_items.append(f"{item.quantity}x {item.product.sku}")
+        else:
+            formatted_items.append(item.product.sku)
+    return '; '.join(formatted_items)
 
 def process_shipstation_data(shipstation_orders):
     processed_orders = []
