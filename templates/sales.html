@@ -6,6 +6,7 @@
 {% block content %}
 <h1>Sales</h1>
 <button id="addSaleBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Sale</button>
+<button id="exportSaleBtn" class="btn btn-primary"><i class="fas fa-file-csv"></i> Export Sales</button>
 <div id="salesGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
 {% endblock %}
 
@@ -178,6 +179,32 @@ document.addEventListener('DOMContentLoaded', function() {
         if (valueB == null) return 1;
         return valueA.toString().toLowerCase().localeCompare(valueB.toString().toLowerCase());
     }
+
+    function getDateFilterRange() {
+        var filterModel = gridOptions.api.getFilterModel();
+        if (filterModel && filterModel.date) {
+            var model = filterModel.date;
+            var fromDate = model.dateFrom ? new Date(model.dateFrom).toLocaleDateString('en-CA') : null;
+            var toDate = model.dateTo ? new Date(model.dateTo).toLocaleDateString('en-CA') : fromDate;
+            return { fromDate, toDate };
+        }
+        return null;
+    }
+
+    // Add event listener for the export button
+    document.getElementById('exportSaleBtn').addEventListener('click', function() {
+        var dateRange = getDateFilterRange();
+        var fileName = 'Sales_Export.csv';
+        if (dateRange && dateRange.fromDate && dateRange.toDate) {
+            fileName = `Sales_${dateRange.fromDate}_to_${dateRange.toDate}.csv`;
+        }
+
+        var params = {
+            fileName: fileName
+        };
+
+        gridOptions.api.exportDataAsCsv(params);
+    });
 
     var gridDiv = document.querySelector('#salesGrid');
     new agGrid.Grid(gridDiv, gridOptions);
