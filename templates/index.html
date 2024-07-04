@@ -94,7 +94,7 @@
                     }
                 },
                 { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
-                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 }
+                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
             ],
             rowData: [
                 {% for sale in recent_sales %}
