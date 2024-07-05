@@ -103,7 +103,7 @@
         };
 
         var gridDiv = document.querySelector('#productsGrid');
-        new agGrid.createGrid(gridDiv, gridOptions);
+        gridApi = agGrid.createGrid(gridDiv, gridOptions);
     });
 
     function deleteProduct(productId) {
@@ -112,7 +112,7 @@
             method: "POST",
             success: function(response) {
                 if (response.success) {
-                    location.reload();
+                    refreshGrid('/api/products', gridApi);
                 } else {
                     alert("Error deleting product");
                 }
@@ -179,7 +179,10 @@
                 success: function(response) {
                     if (response.success) {
                         modal.hide();
-                        location.reload();
+                        setTimeout(function() {
+                            //location.reload();
+                            refreshGrid('/api/products', gridApi);
+                        }, 1500); // 3000 milliseconds = 3 seconds
                     } else {
                         alert("Error saving product");
                     }

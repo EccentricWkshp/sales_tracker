@@ -1,3 +1,14 @@
+function refreshGrid(url, gridApi) {
+    fetch(url)
+        .then(response => response.json())
+        .then(data => {
+            gridApi.setGridOption("rowData", data);
+        })
+        .catch(error => {
+            console.error('Error fetching data:', error);
+        });
+}
+
 function greaterlessComparator(filterValue, cellValue) {
     if (cellValue == null) return -1;
     if (filterValue == null) return 1;
@@ -49,13 +60,14 @@ function currencyFormatter(params) {
     return '$' + params.value.toFixed(2);
 }
 
-function deleteSale(saleId) {
+function deleteSale(saleId, url, gridApi) {
     $.ajax({
         url: "/sales/delete/" + saleId,
         method: "POST",
         success: function(response) {
             if (response.success) {
-                location.reload();
+                //location.reload();
+                refreshGrid(url, gridApi);
             } else {
                 alert("Error deleting sale");
             }

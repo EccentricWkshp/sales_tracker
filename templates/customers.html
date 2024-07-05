@@ -49,178 +49,184 @@
 
 {% block extra_scripts %}
 <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        var gridOptions = {
-            autoSizeStrategy: {
-                type: "fitCellContents",
-            },
-            pagination: true,
-            paginationPageSize: 100,
-            paginationPageSizeSelector: [100, 200, 500, 1000],
-            columnDefs: [
-                {
-                    headerName: '',
-                    field: 'delete',
-                    cellRenderer: function(params) {
-                        return '<i class="fas fa-trash text-danger delete-customer" style="cursor: pointer;"></i>';
-                    },
-                    onCellClicked: function(params) {
-                        if (confirm("Are you sure you want to delete this customer?")) {
-                            deleteCustomer(params.data.id);
-                        }
-                    },
-                    maxWidth: 40,
-                    sortable: false,
-                    filter: false,
-                    resizable: false,
-                    suppressAutoSize: true,
-                    suppressSizeToFit: true
-                },
-                {
-                    headerName: '',
-                    field: 'edit',
-                    cellRenderer: function(params) {
-                        return '<i class="fas fa-edit text-primary edit-customer" style="cursor: pointer;"></i>';
-                    },
-                    onCellClicked: function(params) {
-                        editCustomer(params.data.id);
-                    },
-                    maxWidth: 40,
-                    sortable: false,
-                    filter: false,
-                    resizable: false,
-                    suppressAutoSize: true,
-                    suppressSizeToFit: true
-                },
-                { headerName: 'Name', field: 'name', sortable: true, sort: 'asc', filter: true },
-                { headerName: 'Company', field: 'company', sortable: true, filter: true },
-                { headerName: 'Email', field: 'email', sortable: true, filter: true },
-                { headerName: 'Billing Address', field: 'billing_address', sortable: true, filter: true, suppressSizeToFit: true },
-                { headerName: 'Shipping Address', field: 'shipping_address', sortable: true, filter: true, suppressSizeToFit: true }
-            ],
-            rowData: [
-                {% for customer in customers %}
-                {
-                    id: {{ customer.id }},
-                    name: '{{ customer.name|cleaned }}',
-                    company: '{{ customer.company|cleaned }}',
-                    email: '{{ customer.email }}',
-                    billing_address: '{{ customer.billing_address.replace('\n', ' ')|cleaned }}',
-                    shipping_address: '{{ customer.shipping_address.replace('\n', ' ')|cleaned }}'
-                },
-                {% endfor %}
-            ],
-            defaultColDef: {
-                flex: 1,
-                minWidth: 100,
-                resizable: true,
-                comparator: caseInsensitiveComparator,
-                filterParams: {
-                    buttons: ["apply", "reset"],
-                    closeOnApply: true
-                }
-            },
-            onRowClicked: function(params) {
-                if (!params.event.target.classList.contains('delete-customer') && !params.event.target.classList.contains('edit-customer')) {
-                    viewCustomer(params.data.id);
-                }
-            }
-        };
 
-        var gridDiv = document.querySelector('#customersGrid');
-        new agGrid.createGrid(gridDiv, gridOptions);
+var gridOptions = {
+    autoSizeStrategy: {
+        type: "fitCellContents",
+    },
+    pagination: true,
+    paginationPageSize: 100,
+    paginationPageSizeSelector: [100, 200, 500, 1000],
+    columnDefs: [
+        {
+            headerName: '',
+            field: 'delete',
+            cellRenderer: function(params) {
+                return '<i class="fas fa-trash text-danger delete-customer" style="cursor: pointer;"></i>';
+            },
+            onCellClicked: function(params) {
+                if (confirm("Are you sure you want to delete this customer?")) {
+                    deleteCustomer(params.data.id);
+                }
+            },
+            maxWidth: 40,
+            sortable: false,
+            filter: false,
+            resizable: false,
+            suppressAutoSize: true,
+            suppressSizeToFit: true
+        },
+        {
+            headerName: '',
+            field: 'edit',
+            cellRenderer: function(params) {
+                return '<i class="fas fa-edit text-primary edit-customer" style="cursor: pointer;"></i>';
+            },
+            onCellClicked: function(params) {
+                editCustomer(params.data.id);
+            },
+            maxWidth: 40,
+            sortable: false,
+            filter: false,
+            resizable: false,
+            suppressAutoSize: true,
+            suppressSizeToFit: true
+        },
+        { headerName: 'Name', field: 'name', sortable: true, sort: 'asc', filter: true },
+        { headerName: 'Company', field: 'company', sortable: true, filter: true, valueFormatter: params => params.value ? params.value : '' },
+        { headerName: 'Email', field: 'email', sortable: true, filter: true },
+        { headerName: 'Billing Address', field: 'billing_address', sortable: true, filter: true, suppressSizeToFit: true },
+        { headerName: 'Shipping Address', field: 'shipping_address', sortable: true, filter: true, suppressSizeToFit: true }
+    ],
+    rowData: [
+        {% for customer in customers %}
+        {
+            id: {{ customer.id }},
+            name: '{{ customer.name|cleaned }}',
+            company: '{{ customer.company|cleaned }}',
+            email: '{{ customer.email }}',
+            billing_address: '{{ customer.billing_address.replace('\n', ' ')|cleaned }}',
+            shipping_address: '{{ customer.shipping_address.replace('\n', ' ')|cleaned }}'
+        },
+        {% endfor %}
+    ],
+    defaultColDef: {
+        flex: 1,
+        minWidth: 100,
+        resizable: true,
+        comparator: caseInsensitiveComparator,
+        filterParams: {
+            buttons: ["apply", "reset"],
+            closeOnApply: true
+        }
+    },
+    onRowClicked: function(params) {
+        if (!params.event.target.classList.contains('delete-customer') && !params.event.target.classList.contains('edit-customer')) {
+            viewCustomer(params.data.id);
+        }
+    }
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+    var gridDiv = document.querySelector('#customersGrid');
+    gridApi = agGrid.createGrid(gridDiv, gridOptions);
+});
+
+function deleteCustomer(customerId) {
+    $.ajax({
+        url: "/customers/delete/" + customerId,
+        method: "POST",
+            success: function(response) {
+                $('#deleteResult').html('<div class="alert alert-success">' + response.success + '</div>');
+                // Wait for a few seconds before reloading the page
+                setTimeout(function() {
+                    //location.reload();
+                    refreshGrid('/api/customers', gridApi);
+                    $('#deleteResult').html('');
+                }, 1500); // 3000 milliseconds = 3 seconds
+            },
+            error: function(xhr) {
+                var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
+                $('#deleteResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
+                setTimeout(function() {
+                    //location.reload();
+                    refreshGrid('/api/customers', gridApi);
+                    $('#deleteResult').html('');
+                }, 1500); // 3000 milliseconds = 3 seconds
+            }
+    });
+}
+
+function editCustomer(customerId) {
+    // Implement edit functionality (e.g., open modal)
+    $("#modalTitle").text("Edit Customer");
+    $.get("/customers/get/" + customerId, function(data) {
+        $("#customerId").val(data.id);
+        $("#name").val(data.name);
+        $("#company").val(data.company);
+        $("#email").val(data.email);
+        $("#phone").val(data.phone);
+        $("#billing_address").val(data.billing_address);
+        $("#shipping_address").val(data.shipping_address);
+        $("#customerModal").show();
+    });
+}
+
+$(document).ready(function() {
+    var modal = $("#customerModal");
+    var addBtn = $("#addCustomerBtn");
+    var closeBtn = $(".close");
+    var form = $("#customerForm");
+
+    addBtn.click(function() {
+        $("#modalTitle").text("Add Customer");
+        form[0].reset();
+        $("#customerId").val("");
+        modal.show();
     });
 
-    function deleteCustomer(customerId) {
-        $.ajax({
-            url: "/customers/delete/" + customerId,
-            method: "POST",
-                success: function(response) {
-                    $('#deleteResult').html('<div class="alert alert-success">' + response.success + '</div>');
-                    // Wait for a few seconds before reloading the page
-                    setTimeout(function() {
-                        location.reload();
-                    }, 1500); // 3000 milliseconds = 3 seconds
-                },
-                error: function(xhr) {
-                    var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
-                    $('#deleteResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
-                    setTimeout(function() {
-                        location.reload();
-                    }, 1500); // 3000 milliseconds = 3 seconds
-                }
-        });
-    }
+    closeBtn.click(function() {
+        modal.hide();
+    });
 
-    function editCustomer(customerId) {
-        // Implement edit functionality (e.g., open modal)
-        $("#modalTitle").text("Edit Customer");
-        $.get("/customers/get/" + customerId, function(data) {
-            $("#customerId").val(data.id);
-            $("#name").val(data.name);
-            $("#company").val(data.company);
-            $("#email").val(data.email);
-            $("#phone").val(data.phone);
-            $("#billing_address").val(data.billing_address);
-            $("#shipping_address").val(data.shipping_address);
-            $("#customerModal").show();
-        });
-    }
-
-    $(document).ready(function() {
-        var modal = $("#customerModal");
-        var addBtn = $("#addCustomerBtn");
-        var closeBtn = $(".close");
-        var form = $("#customerForm");
-
-        addBtn.click(function() {
-            $("#modalTitle").text("Add Customer");
-            form[0].reset();
-            $("#customerId").val("");
-            modal.show();
-        });
-
-        closeBtn.click(function() {
+    $(window).click(function(event) {
+        if (event.target == modal[0]) {
             modal.hide();
-        });
-
-        $(window).click(function(event) {
-            if (event.target == modal[0]) {
-                modal.hide();
-            }
-        });
-
-        form.submit(function(e) {
-            e.preventDefault();
-            var url = $("#customerId").val() ? "/customers/edit/" + $("#customerId").val() : "/customers/add";
-            $.ajax({
-                url: url,
-                method: "POST",
-                data: JSON.stringify({
-                    name: $("#name").val(),
-                    company: $("#company").val(),
-                    email: $("#email").val(),
-                    phone: $("#phone").val(),
-                    billing_address: $("#billing_address").val(),
-                    shipping_address: $("#shipping_address").val()
-                }),
-                contentType: "application/json",
-                success: function(response) {
-                    if (response.success) {
-                        modal.hide();
-                        location.reload();
-                    } else {
-                        alert("Error saving customer");
-                    }
-                }
-            });
-        });
+        }
     });
 
-    function viewCustomer(customerId) {
-        // Implement view functionality (e.g., redirect to customer details page)
-        window.location.href = "/customers/view/" + customerId;
-    }
+    form.submit(function(e) {
+        e.preventDefault();
+        var url = $("#customerId").val() ? "/customers/edit/" + $("#customerId").val() : "/customers/add";
+        $.ajax({
+            url: url,
+            method: "POST",
+            data: JSON.stringify({
+                name: $("#name").val(),
+                company: $("#company").val(),
+                email: $("#email").val(),
+                phone: $("#phone").val(),
+                billing_address: $("#billing_address").val(),
+                shipping_address: $("#shipping_address").val()
+            }),
+            contentType: "application/json",
+            success: function(response) {
+                if (response.success) {
+                    modal.hide();
+                    //location.reload();
+                    refreshGrid('/api/customers', gridApi);
+                } else {
+                    alert("Error saving customer");
+                }
+            }
+        });
+    });
+});
+
+function viewCustomer(customerId) {
+    // Implement view functionality (e.g., redirect to customer details page)
+    window.location.href = "/customers/view/" + customerId;
+}
 </script>
 
 {% endblock %}

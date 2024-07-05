@@ -99,21 +99,54 @@ class Customer(db.Model):
     sales = db.relationship('SalesReceipt', backref='customer', lazy=True)
     shipstation_mapping = db.relationship('ShipStationCustomerMapping', uselist=False, back_populates='customer')
 
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'company': self.company,
+            'email': self.email,
+            'billing_address': self.billing_address,
+            'shipping_address': self.shipping_address,
+            'phone': self.phone
+        }
+
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sku = db.Column(db.String(20), unique=True, nullable=False)
     description = db.Column(db.String(200), nullable=False)
     price = db.Column(db.Float, nullable=False)
 
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'sku': self.sku,
+            'description': self.description,
+            'price': self.price
+        }
+
 class SalesReceipt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     shipstation_order_id = db.Column(db.String(50), unique=True, nullable=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
+    customer_name = db.relationship('Customer', backref='sales_receipts', lazy=True)
     date = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp())
     total = db.Column(db.Float, nullable=False)
     tax = db.Column(db.Float, nullable=False)
     shipping = db.Column(db.Float, nullable=False)
     line_items = db.relationship('LineItem', backref='sales_receipt', lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'shipstation_order_id': self.shipstation_order_id,
+            'customer_id': self.customer_id,
+            'customer_name': self.customer.name if self.customer else None,
+            'date': self.date.strftime('%m-%d-%Y'),
+            'total': self.total,
+            'tax': self.tax,
+            'shipping': self.shipping,
+            'line_items': [item.to_dict() for item in self.line_items]
+        }
 
 class LineItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -123,6 +156,17 @@ class LineItem(db.Model):
     price_each = db.Column(db.Float, nullable=False)
     total_price = db.Column(db.Float, nullable=False)
     product = db.relationship('Product')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'receipt_id': self.receipt_id,
+            'product_id': self.product_id,
+            'quantity': self.quantity,
+            'price_each': self.price_each,
+            'total_price': self.total_price,
+            'product': self.product.to_dict() if self.product else None
+        }
 
 class ShipStationCustomerMapping(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -325,6 +369,15 @@ def customers():
 @login_required
 def add_customer():
     data = request.json
+    
+    #get_or_create_customer(data)  will want to try to swtich to this at some point
+
+    if not data['email']:
+        # Generate a unique placeholder email
+        placeholder_email = f"placeholder_{uuid.uuid4().hex}@example.com"
+        app.logger.warning(f"Missing customer email. Generated placeholder: {placeholder_email}")
+        data['email'] = placeholder_email
+    
     new_customer = Customer(
         name=data['name'],
         company=data['company'],
@@ -335,6 +388,7 @@ def add_customer():
     )
     db.session.add(new_customer)
     db.session.commit()
+    
     return jsonify({'success': True, 'id': new_customer.id})
 
 @app.route('/customers/edit/<int:id>', methods=['POST'])
@@ -373,6 +427,31 @@ def view_customer(id):
     
     return render_template('view_customer.html', customer=customer, orders=orders)
 
+@app.route('/customers/delete/<int:id>', methods=['POST'])
+@login_required
+def delete_customer(id):
+    customer = Customer.query.get_or_404(id)
+    #db.session.delete(customer)
+    #db.session.commit()
+    #return jsonify({'success': True})
+
+    try:
+        db.session.delete(customer)
+        db.session.commit()
+        return jsonify({"success": f"Deleted {customer.name}"}), 200
+    except IntegrityError:
+        db.session.rollback()
+        app.logger.error(f"Error deleting customer: {customer.name}")
+        return jsonify({"error": f"Cannot delete {customer.name}: associated sales receipts"}), 400
+
+@app.route('/api/customers')
+@login_required
+def get_customers():
+    customers = Customer.query.all()
+    customers_dict = [customer.to_dict() for customer in customers]
+
+    return jsonify(customers_dict)
+
 @app.route('/api/customer_orders/<int:id>')
 @login_required
 def get_customer_orders(id):
@@ -392,26 +471,7 @@ def get_customer_orders(id):
         })
     
     return jsonify(order_data)
-
-@app.route('/customers/delete/<int:id>', methods=['POST'])
-@login_required
-def delete_customer(id):
-    customer = Customer.query.get_or_404(id)
-    #db.session.delete(customer)
-    #db.session.commit()
-    #return jsonify({'success': True})
-
-    try:
-        db.session.delete(customer)
-        db.session.commit()
-        return jsonify({"success": f"Deleted {customer.name}"}), 200
-    except IntegrityError:
-        db.session.rollback()
-        app.logger.error(f"Error deleting customer: {customer.name}")
-        return jsonify({"error": f"Cannot delete {customer.name}: associated sales receipts"}), 400
         
-
-
 @app.route('/products')
 @login_required
 def products():
@@ -462,6 +522,25 @@ def delete_product(id):
     db.session.delete(product)
     db.session.commit()
     return jsonify({'success': True})
+
+@app.route('/api/products')
+@login_required
+def get_products():
+    products = Product.query.all()
+    products_dict = [product.to_dict() for product in products]
+
+    return jsonify(products_dict)
+
+@app.route('/api/product/<int:id>')
+@login_required
+def get_product_api(id):
+    product = Product.query.get_or_404(id)
+    return jsonify({
+        'id': product.id,
+        'sku': product.sku,
+        'description': product.description,
+        'price': float(product.price)
+    })
 
 @app.route('/sales')
 @login_required
@@ -623,6 +702,14 @@ def print_sale(id):
 
     return render_template('print_sale.html', sale=sale, company_info=company_info)
 
+@app.route('/api/sales')
+@login_required
+def get_SalesReceipt():
+    SalesReceipts = SalesReceipt.query.all()
+    SalesReceipts_dict = [SalesReceipt.to_dict() for SalesReceipt in SalesReceipts]
+
+    return jsonify(SalesReceipts_dict)
+
 @app.route('/api/calculate_tax', methods=['POST'])
 @login_required
 def calculate_tax():
@@ -630,17 +717,6 @@ def calculate_tax():
     # Assuming a flat 1.5% B&O tax rate for this example
     tax = total * 0.015
     return jsonify({'tax': round(tax, 2)})
-
-@app.route('/api/product/<int:id>')
-@login_required
-def get_product_api(id):
-    product = Product.query.get_or_404(id)
-    return jsonify({
-        'id': product.id,
-        'sku': product.sku,
-        'description': product.description,
-        'price': float(product.price)
-    })
 
 @app.route('/shipstation/fetch_orders', methods=['POST'])
 @login_required
