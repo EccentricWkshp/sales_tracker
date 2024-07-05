@@ -84,8 +84,8 @@
                 {% for product in products %}
                 {
                     id: {{ product.id }},
-                    sku: '{{ product.sku }}',
-                    description: '{{ product.description }}',
+                    sku: '{{ product.sku|cleaned }}',
+                    description: '{{ product.description|cleaned }}',
                     price: '{{ "%.2f"|format(product.price) }}'
                 },
                 {% endfor %}

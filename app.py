@@ -7,6 +7,7 @@ from flask.cli import with_appcontext
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
+import json
 import logging
 from markupsafe import Markup
 import os
@@ -137,6 +138,24 @@ class ShipStationCredentials(db.Model):
 @app.template_filter('nl2br')
 def nl2br(value):
     return Markup(value.replace('\n', '<br>\n'))
+
+@app.template_filter('cleaned')
+def cleaned(value):
+    # Handle None and variations of "None"
+    if value is None or str(value).strip().lower() == 'none':
+        return ""
+
+    # Serialize value to JSON with ensure_ascii=False to keep Unicode characters
+    json_value = json.dumps(value, ensure_ascii=False)
+
+    # Escape backslashes and single quotes for JavaScript
+    json_value = json_value.replace("\\", "\\\\").replace("'", "\\'")
+
+    # Remove enclosing double quotes
+    if json_value.startswith('"') and json_value.endswith('"'):
+        json_value = json_value[1:-1]
+
+    return Markup(json_value)
 
 @login_manager.user_loader
 def load_user(user_id):

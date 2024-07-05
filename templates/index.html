@@ -100,7 +100,7 @@
                 {
                     id: {{ sale.id }},
                     date: '{{ sale.date.strftime('%m-%d-%Y') }}',
-                    customer: '{{ sale.customer.name }}',
+                    customer: '{{ sale.customer.name|cleaned }}',
                     total: '{{ "%.2f"|format(sale.total) }}'
                 },
                 {% endfor %}

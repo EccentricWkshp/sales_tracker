@@ -54,6 +54,9 @@
             autoSizeStrategy: {
                 type: "fitCellContents",
             },
+            pagination: true,
+            paginationPageSize: 100,
+            paginationPageSizeSelector: [100, 200, 500, 1000],
             columnDefs: [
                 {
                     headerName: '',
@@ -99,11 +102,11 @@
                 {% for customer in customers %}
                 {
                     id: {{ customer.id }},
-                    name: '{{ customer.name }}',
-                    company: '{{ customer.company }}',
+                    name: '{{ customer.name|cleaned }}',
+                    company: '{{ customer.company|cleaned }}',
                     email: '{{ customer.email }}',
-                    billing_address: '{{ customer.billing_address.replace('\n', ' ') }}',
-                    shipping_address: '{{ customer.shipping_address.replace('\n', ' ') }}'
+                    billing_address: '{{ customer.billing_address.replace('\n', ' ')|cleaned }}',
+                    shipping_address: '{{ customer.shipping_address.replace('\n', ' ')|cleaned }}'
                 },
                 {% endfor %}
             ],

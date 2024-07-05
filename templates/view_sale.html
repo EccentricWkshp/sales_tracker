@@ -1,12 +1,12 @@
 <!-- templates/view_sale.html -->
 {% extends "base.html" %}
 
-{% block title %}Sales Receipt #{{ sale.id }}{% endblock %}
+{% block title %}Sales Receipt #{{ sale.shipstation_order_id }}{% endblock %}
 
 {% block content %}
 <div class="view-sale edit-sale">
     <div class="invoice-header">
-        <h1 class="invoice-title">Sales Receipt #{{ sale.id }}</h1>
+        <h1 class="invoice-title">Sales Receipt #{{ sale.shipstation_order_id }}</h1>
         <div class="invoice-details">
             <p><strong>Date:</strong> {{ sale.date.strftime('%Y-%m-%d') }}</p>
             <p><strong>Order ID:</strong> {{ sale.shipstation_order_id }}</p>
