@@ -244,8 +244,10 @@ def login():
                 return redirect(url_for('index'))
         else:
             flash('Invalid username or password', 'error')
+        
+    company_info = CompanyInfo.get_info()
 
-    return render_template('login.html', next=next_page)
+    return render_template('login.html', next=next_page, company_info=company_info)
 
 @app.route('/logout')
 @login_required
@@ -436,8 +438,9 @@ def get_customer(id):
 def view_customer(id):
     customer = Customer.query.get_or_404(id)
     orders = SalesReceipt.query.filter_by(customer_id=id).order_by(SalesReceipt.date.desc()).all()
+    company_info = CompanyInfo.get_info()
     
-    return render_template('view_customer.html', customer=customer, orders=orders)
+    return render_template('view_customer.html', customer=customer, orders=orders, company_info=company_info)
 
 @app.route('/customers/delete/<int:id>', methods=['POST'])
 @login_required

@@ -8,11 +8,12 @@
     <div class="customer-info-pane">
         <h2>Customer Info</h2>
         <p><strong>Name:</strong> {{ customer.name }}</p>
-        <p><strong>Email:</strong> {{ customer.email }}</p>
-        <p><strong>Email 2:</strong> {{ customer.email_2 }}</p>
+        <p><strong>Email:</strong> {% if not customer.email.startswith('placeholder_') %} {{ customer.email }} {% endif %}</p>
+        <p><strong>Secondary Email:</strong> {% if customer.email_2 and not customer.email_2.startswith('placeholder_') %} {{ customer.email_2 }} {% endif %}</p>
         <p><strong>Company:</strong> {{ customer.company or 'N/A' }}</p>
         <p><strong>Phone:</strong> {{ customer.phone or 'N/A' }}</p>
     </div>
+
     <div class="address-pane">
         <h2>Billing Address</h2>
         <p>{{ customer.billing_address | nl2br }}</p>
