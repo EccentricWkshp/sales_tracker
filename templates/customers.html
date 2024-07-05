@@ -7,6 +7,7 @@
 <h1>Customers</h1>
 <div id="deleteResult" class="mt-3"></div>
 <button id="addCustomerBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Customer</button>
+<button id="mergeCustomersBtn" class="btn btn-primary" disabled><i class="fas fa-object-group"></i> Merge Selected</button>
 <div id="customersGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
 {% endblock %}
 
@@ -45,6 +46,16 @@
         </form>
     </div>
 </div>
+
+<div id="mergeConfirmModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h2>Confirm Merge</h2>
+        <p>Are you sure you want to merge the selected customers? This action cannot be undone.</p>
+        <button id="confirmMergeBtn" class="btn btn-primary">Confirm Merge</button>
+        <button id="cancelMergeBtn" class="btn btn-secondary">Cancel</button>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -57,7 +68,21 @@ var gridOptions = {
     pagination: true,
     paginationPageSize: 100,
     paginationPageSizeSelector: [100, 200, 500, 1000],
+    rowSelection: 'multiple',
+    onSelectionChanged: onSelectionChanged,
     columnDefs: [
+        {
+            headerName: '',
+            field: 'checkbox',
+            headerCheckboxSelection: true,
+            checkboxSelection: true,
+            width: 40,
+            sortable: false,
+            filter: false,
+            resizable: false,
+            suppressAutoSize: true,
+            suppressSizeToFit: true
+        },
         {
             headerName: '',
             field: 'delete',
@@ -69,7 +94,7 @@ var gridOptions = {
                     deleteCustomer(params.data.id);
                 }
             },
-            maxWidth: 40,
+            width: 40,
             sortable: false,
             filter: false,
             resizable: false,
@@ -85,7 +110,23 @@ var gridOptions = {
             onCellClicked: function(params) {
                 editCustomer(params.data.id);
             },
-            maxWidth: 40,
+            width: 40,
+            sortable: false,
+            filter: false,
+            resizable: false,
+            suppressAutoSize: true,
+            suppressSizeToFit: true
+        },
+        {
+            headerName: '',
+            field: 'view',
+            cellRenderer: function(params) {
+                return '<i class="fas fa-eye  view-customer" style="cursor: pointer;"></i>';
+            },
+            onCellClicked: function(params) {
+                viewCustomer(params.data.id);
+            },
+            width: 40,
             sortable: false,
             filter: false,
             resizable: false,
@@ -112,17 +153,11 @@ var gridOptions = {
     ],
     defaultColDef: {
         flex: 1,
-        minWidth: 100,
         resizable: true,
         comparator: caseInsensitiveComparator,
         filterParams: {
             buttons: ["apply", "reset"],
             closeOnApply: true
-        }
-    },
-    onRowClicked: function(params) {
-        if (!params.event.target.classList.contains('delete-customer') && !params.event.target.classList.contains('edit-customer')) {
-            viewCustomer(params.data.id);
         }
     }
 };
@@ -169,6 +204,65 @@ function editCustomer(customerId) {
         $("#billing_address").val(data.billing_address);
         $("#shipping_address").val(data.shipping_address);
         $("#customerModal").show();
+    });
+}
+
+function onSelectionChanged() {
+    var selectedRows = gridApi.getSelectedRows();
+    var mergeBtn = document.getElementById('mergeCustomersBtn');
+    mergeBtn.disabled = selectedRows.length !== 2;
+}
+
+document.getElementById('mergeCustomersBtn').addEventListener('click', function() {
+    var selectedRows = gridApi.getSelectedRows();
+    if (selectedRows.length === 2) {
+        showMergeConfirmModal(selectedRows);
+    }
+});
+
+function showMergeConfirmModal(selectedRows) {
+    var modal = document.getElementById('mergeConfirmModal');
+    modal.style.display = 'block';
+
+    document.getElementById('confirmMergeBtn').onclick = function() {
+        mergeCustomers(selectedRows[0].id, selectedRows[1].id);
+        modal.style.display = 'none';
+    };
+
+    document.getElementById('cancelMergeBtn').onclick = function() {
+        modal.style.display = 'none';
+    };
+
+    var span = modal.getElementsByClassName('close')[0];
+    span.onclick = function() {
+        modal.style.display = 'none';
+    };
+
+    window.onclick = function(event) {
+        if (event.target == modal) {
+            modal.style.display = 'none';
+        }
+    };
+}
+
+function mergeCustomers(customerId1, customerId2) {
+    $.ajax({
+        url: "/customers/merge",
+        method: "POST",
+        data: JSON.stringify({
+            customer_id1: customerId1,
+            customer_id2: customerId2
+        }),
+        contentType: "application/json",
+        success: function(response) {
+            alert(response.message);
+            if (response.success) {
+                refreshGrid('/api/customers', gridApi);
+            }
+        },
+        error: function(xhr) {
+            alert("Error merging customers: " + xhr.responseJSON.message);
+        }
     });
 }
 

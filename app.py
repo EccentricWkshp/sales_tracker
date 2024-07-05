@@ -94,6 +94,7 @@ class Customer(db.Model):
     name = db.Column(db.String(100), nullable=False)
     company = db.Column(db.String(100))
     email = db.Column(db.String(120), unique=True, nullable=False)
+    email_2 = db.Column(db.String(120))
     billing_address = db.Column(db.String(200), nullable=False)
     shipping_address = db.Column(db.String(200), nullable=False)
     phone = db.Column(db.String(20))
@@ -106,6 +107,7 @@ class Customer(db.Model):
             'name': self.name,
             'company': self.company,
             'email': self.email,
+            'email_2': self.email_2,
             'billing_address': self.billing_address,
             'shipping_address': self.shipping_address,
             'phone': self.phone
@@ -180,6 +182,7 @@ class ShipStationCredentials(db.Model):
     api_key = db.Column(db.String(100), nullable=False)
     api_secret = db.Column(db.String(100), nullable=False)
 
+# Filters
 @app.template_filter('nl2br')
 def nl2br(value):
     return Markup(value.replace('\n', '<br>\n'))
@@ -202,6 +205,7 @@ def cleaned(value):
 
     return Markup(json_value)
 
+# Loaders
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, int(user_id))
@@ -451,6 +455,23 @@ def delete_customer(id):
         db.session.rollback()
         app.logger.error(f"Error deleting customer: {customer.name}")
         return jsonify({"error": f"Cannot delete {customer.name}: associated sales receipts"}), 400
+
+@app.route('/customers/merge', methods=['POST'])
+@login_required
+def merge_customers_route():
+    data = request.json
+    customer_id1 = data.get('customer_id1')
+    customer_id2 = data.get('customer_id2')
+
+    if not customer_id1 or not customer_id2:
+        return jsonify({'success': False, 'message': 'Both customer IDs are required.'}), 400
+
+    success, message = merge_customers(customer_id1, customer_id2)
+
+    if success:
+        return jsonify({'success': True, 'message': message}), 200
+    else:
+        return jsonify({'success': False, 'message': message}), 400
 
 @app.route('/api/customers')
 @login_required
@@ -835,6 +856,8 @@ def fetch_shipstation_orders():
         error_msg = f'Error committing changes to database: {str(e)}'
         app.logger.error(error_msg)
         return jsonify({'error': error_msg}), 500
+
+# Functions
 def format_name(name):
     if not name:
         return 'Unknown'
@@ -1032,7 +1055,6 @@ def process_shipstation_data(shipstation_orders):
 
     return processed_orders
 
-
 def parse_shipstation_date(date_str):
     # Split the string at the dot to separate the fractional seconds
     parts = date_str.split('.')
@@ -1081,6 +1103,45 @@ def get_or_create_product(shipstation_item):
         db.session.flush()  # This assigns an ID to the new product
     return product
 
+def merge_customers(customer_id1, customer_id2):
+    """
+    Merge two customers. The customer with the lower ID is preserved.
+    If email addresses differ, the secondary email is saved in email_2 field.
+    """
+    customer1 = Customer.query.get(customer_id1)
+    customer2 = Customer.query.get(customer_id2)
+
+    if not customer1 or not customer2:
+        return False, "One or both customers not found."
+
+    # Determine which customer to keep (lower ID)
+    keep, merge = (customer1, customer2) if customer1.id < customer2.id else (customer2, customer1)
+
+    # Merge email if different
+    if keep.email != merge.email:
+        keep.email_2 = merge.email
+
+    # Merge other fields (use data from 'keep' if available, otherwise use 'merge')
+    keep.company = keep.company or merge.company
+    keep.phone = keep.phone or merge.phone
+    keep.billing_address = keep.billing_address or merge.billing_address
+    keep.shipping_address = keep.shipping_address or merge.shipping_address
+
+    # Update foreign keys in related tables
+    SalesReceipt.query.filter_by(customer_id=merge.id).update({SalesReceipt.customer_id: keep.id})
+    ShipStationCustomerMapping.query.filter_by(customer_id=merge.id).update({ShipStationCustomerMapping.customer_id: keep.id})
+
+    # Delete the merged customer
+    db.session.delete(merge)
+
+    try:
+        db.session.commit()
+        return True, f"Customers merged successfully. Kept customer ID: {keep.id}"
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return False, f"Error merging customers: {str(e)}"
+
+# Create Admin User
 @click.command('create-admin')
 @with_appcontext
 @click.option('--username', prompt=True)
