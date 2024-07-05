@@ -125,7 +125,8 @@ document.addEventListener('DOMContentLoaded', function() {
         columnDefs: [
             { 
                 headerName: 'Date', 
-                field: 'date', 
+                field: 'date',
+                width: 125,
                 sortable: true, 
                 filter: 'agDateColumnFilter',
                 filterParams: {
@@ -141,9 +142,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         } else {
                             return 0;
                         }
-                    },
-                    buttons: ['apply', 'reset'],
-                    closeOnApply: true
+                    }
                 },
                 valueFormatter: function(params) {
                     if (!params.value) return '';
@@ -153,10 +152,10 @@ document.addEventListener('DOMContentLoaded', function() {
             },
             { headerName: 'Name', field: 'name', sortable: true, filter: true },
             { headerName: 'State/Country', field: 'state', sortable: true, filter: true },
-            { headerName: 'Manufacturing', field: 'manufacturing', sortable: true, filter: 'agNumberColumnFilter', valueFormatter: currencyFormatter },
-            { headerName: 'Retail', field: 'retail', sortable: true, filter: 'agNumberColumnFilter', valueFormatter: currencyFormatter },
-            { headerName: 'Shipping', field: 'shipping', sortable: true, filter: 'agNumberColumnFilter', valueFormatter: currencyFormatter },
-            { headerName: 'Items', field: 'items', sortable: true, filter: true }
+            { headerName: 'Manufacturing', field: 'manufacturing', sortable: true, filter: 'agNumberColumnFilter', filter: 'agNumberColumnFilter', comparator: greaterlessComparator, valueFormatter: currencyFormatter },
+            { headerName: 'Retail', field: 'retail', sortable: true, filter: 'agNumberColumnFilter', filter: 'agNumberColumnFilter', comparator: greaterlessComparator, valueFormatter: currencyFormatter },
+            { headerName: 'Shipping', field: 'shipping', sortable: true, filter: 'agNumberColumnFilter', filter: 'agNumberColumnFilter', comparator: greaterlessComparator, valueFormatter: currencyFormatter },
+            { headerName: 'Items', field: 'items', sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator }
         ],
         defaultColDef: {
             flex: 1,
@@ -201,11 +200,6 @@ document.addEventListener('DOMContentLoaded', function() {
             params.api.sizeColumnsToFit();
         }
     };
-
-    function currencyFormatter(params) {
-        if (params.value === null || params.value === undefined) return '';
-        return '$' + params.value.toFixed(2);
-    }
 
     function updateStatistics(rows) {
         var salesCount = rows.length;

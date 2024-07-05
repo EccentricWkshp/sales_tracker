@@ -4,82 +4,164 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Sales App{% endblock %}</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <title>Invoice #{{ sale.shipstation_order_id }} - {{ company_info.name }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .invoice-header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .company-logo {
+            max-width: 200px;
+            max-height: 100px;
+        }
+        .invoice-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .invoice-details {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .invoice-details div {
+            flex-basis: 50%;
+        }
+        .address-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .address-info div {
+            flex-basis: 48%;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .totals {
+            text-align: right;
+        }
+        .totals table {
+            width: auto;
+            margin-left: auto;
+        }
+        .totals td {
+            padding: 5px 10px;
+        }
+        .totals .total {
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        @media print {
+            body {
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+            }
+        }
+    </style>
 </head>
 <body>
-
-<div class="view-sale">
-    <h1>Sales Receipt #{{ sale.id }}</h1>
-
-    <div id="branding">
+    <div class="invoice-header">
         {% if company_info and company_info.logo %}
             <img src="{{ company_info.logo }}" alt="{{ company_info.name }} Logo" class="company-logo">
         {% endif %}
-        <h1><a href="{{ url_for('index') }}">
-            {% if company_info and company_info.name %}
-                {{ company_info.name }}
-            {% else %}
-                Sales Management System
-            {% endif %}
-        </a></h1>
+        <h1 class="invoice-title">{{ company_info.name }}</h1>
     </div>
-    
-    <div class="sale-info">
-        <strong>Date:</strong> {{ sale.date.strftime('%m-%d-%Y') }}<br>
-        <strong>Customer:</strong> {{ sale.customer.name }} ({{ sale.customer.email }})
+
+    <div class="invoice-details">
+        <div>
+            <strong>Invoice #:</strong> {{ sale.shipstation_order_id }}<br>
+            <strong>Date:</strong> {{ sale.date.strftime('%B %d, %Y') }}<br>
+            <strong>Customer ID:</strong> {{ sale.customer.id }}
+        </div>
+        <div>
+            {% if company_info %}
+                {% if company_info.address %}{{ company_info.address | nl2br }}<br>{% endif %}
+                {% if company_info.phone %}Phone: {{ company_info.phone }}<br>{% endif %}
+                Email: {{ company_info.email }}
+            {% endif %}
+        </div>
     </div>
 
     <div class="address-info">
-        <div class="billing-address">
-            <h3>Billing Address</h3>
+        <div>
+            <h3>Bill To:</h3>
             {{ sale.customer.name }}<br>
             {{ sale.customer.billing_address | nl2br }}
         </div>
-        <div class="shipping-address">
-            <h3>Shipping Address</h3>
+        <div>
+            <h3>Ship To:</h3>
             {{ sale.customer.name }}<br>
             {{ sale.customer.shipping_address | nl2br }}
         </div>
     </div>
 
-    <div class="line-items">
+    <table>
+        <thead>
+            <tr>
+                <th>SKU</th>
+                <th>Description</th>
+                <th>Quantity</th>
+                <th>Unit Price</th>
+                <th>Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in sale.line_items %}
+            <tr>
+                <td>{{ item.product.sku }}</td>
+                <td>{{ item.product.description }}</td>
+                <td>{{ item.quantity }}</td>
+                <td>${{ "%.2f"|format(item.price_each) }}</td>
+                <td>${{ "%.2f"|format(item.total_price) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="totals">
         <table>
-            <thead>
-                <tr>
-                    <th>SKU</th>
-                    <th>Product</th>
-                    <th>Quantity</th>
-                    <th>Price Each</th>
-                    <th>Total</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in sale.line_items %}
-                <tr>
-                    <td>{{ item.product.sku }}</td>
-                    <td>{{ item.product.description }}</td>
-                    <td>{{ item.quantity }}</td>
-                    <td>${{ "%.2f"|format(item.price_each) }}</td>
-                    <td>${{ "%.2f"|format(item.total_price) }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
+            <tr>
+                <td>Subtotal:</td>
+                <td>${{ "%.2f"|format(sale.total - sale.tax - sale.shipping) }}</td>
+            </tr>
+            <tr>
+                <td>Tax:</td>
+                <td>${{ "%.2f"|format(sale.tax) }}</td>
+            </tr>
+            <tr>
+                <td>Shipping:</td>
+                <td>${{ "%.2f"|format(sale.shipping) }}</td>
+            </tr>
+            <tr class="total">
+                <td>Total:</td>
+                <td>${{ "%.2f"|format(sale.total) }}</td>
+            </tr>
         </table>
     </div>
 
-    <div class="sale-summary" align="right">
-        <p><strong>Subtotal:</strong> ${{ "%.2f"|format(sale.total - sale.tax - sale.shipping) }}</p>
-        <p><strong>Tax:</strong> ${{ "%.2f"|format(sale.tax) }}</p>
-        <p><strong>Shipping:</strong> ${{ "%.2f"|format(sale.shipping) }}</p>
-        <p class="total"><strong>Total:</strong> ${{ "%.2f"|format(sale.total) }}</p>
-    </div>
-
-</div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-<script src="{{ url_for('static', filename='script.js') }}"></script>
-
+    <script>
+        window.onload = function() {
+            window.print();
+        }
+    </script>
 </body>
 </html>

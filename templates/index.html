@@ -46,6 +46,7 @@
         <div id="recentSalesGrid" class="ag-theme-alpine" style="width: 100%;"></div>
     
     {% block extra_scripts %}
+    
     <script>
     
     document.addEventListener('DOMContentLoaded', function() {
@@ -84,9 +85,7 @@
                             } else {
                                 return 0;
                             }
-                        },
-                        buttons: ["apply", "reset"],
-                        closeOnApply: true
+                        }
                     },
                     valueFormatter: function(params) {
                         var dateParts = params.value.split('-');
@@ -94,7 +93,7 @@
                     }
                 },
                 { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
-                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, flex: 1 },
+                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator, flex: 1 },
             ],
             rowData: [
                 {% for sale in recent_sales %}
@@ -110,7 +109,6 @@
                 flex: 1,
                 minWidth: 100,
                 resizable: true,
-                accentedSort: true,
                 comparator: caseInsensitiveComparator,
                 filterParams: {
                     buttons: ["apply", "reset"],
@@ -123,16 +121,10 @@
                 }
             }
         };
-
-        function caseInsensitiveComparator(valueA, valueB) {
-            if (valueA == null) return valueB == null ? 0 : -1;
-            if (valueB == null) return 1;
-            return valueA.toString().toLowerCase().localeCompare(valueB.toString().toLowerCase());
-        }
         
         var gridDiv = document.querySelector('#recentSalesGrid');
         if (gridDiv && !gridDiv.gridInitialized) {
-            new agGrid.Grid(gridDiv, gridOptions);
+            new agGrid.createGrid(gridDiv, gridOptions);
             gridDiv.gridInitialized = true;
         }
 

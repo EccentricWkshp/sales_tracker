@@ -78,7 +78,7 @@
                 },
                 { headerName: 'SKU', field: 'sku', sortable: true, sort: 'asc', filter: true },
                 { headerName: 'Description', field: 'description', sortable: true, filter: true },
-                { headerName: 'Price', field: 'price', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true }
+                { headerName: 'Price', field: 'price', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator }
             ],
             rowData: [
                 {% for product in products %}
@@ -94,7 +94,6 @@
                 flex: 1,
                 minWidth: 100,
                 resizable: true,
-                accentedSort: true,
                 comparator: caseInsensitiveComparator,
                 filterParams: {
                     buttons: ["apply", "reset"],
@@ -103,14 +102,8 @@
             }
         };
 
-        function caseInsensitiveComparator(valueA, valueB) {
-            if (valueA == null) return valueB == null ? 0 : -1;
-            if (valueB == null) return 1;
-            return valueA.toString().toLowerCase().localeCompare(valueB.toString().toLowerCase());
-        }
-
         var gridDiv = document.querySelector('#productsGrid');
-        new agGrid.Grid(gridDiv, gridOptions);
+        new agGrid.createGrid(gridDiv, gridOptions);
     });
 
     function deleteProduct(productId) {
