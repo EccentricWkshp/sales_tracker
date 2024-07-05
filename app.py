@@ -19,6 +19,7 @@ import requests
 from sqlalchemy import and_, extract, func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload
+from urllib.parse import urlparse
 import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -224,6 +225,7 @@ def index():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    next_page = request.args.get('next')
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
@@ -231,15 +233,21 @@ def login():
         if user and user.check_password(password):
             login_user(user)
             flash('Logged in successfully.', 'success')
-            return redirect(url_for('index'))
+            # Check if the next parameter is set and is safe to redirect
+            if next_page and urlparse(next_page).netloc == '':
+                return redirect(next_page)
+            else:
+                return redirect(url_for('index'))
         else:
             flash('Invalid username or password', 'error')
-    return render_template('login.html')
+
+    return render_template('login.html', next=next_page)
 
 @app.route('/logout')
 @login_required
 def logout():
     logout_user()
+    flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
 
 @app.route('/management', methods=['GET', 'POST'])
