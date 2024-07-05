@@ -94,7 +94,7 @@ var gridOptions = {
         },
         { headerName: 'Name', field: 'name', sortable: true, sort: 'asc', filter: true },
         { headerName: 'Company', field: 'company', sortable: true, filter: true, valueFormatter: params => params.value ? params.value : '' },
-        { headerName: 'Email', field: 'email', sortable: true, filter: true },
+        { headerName: 'Email', field: 'email', sortable: true, filter: true, valueFormatter: emailValueFormatter },
         { headerName: 'Billing Address', field: 'billing_address', sortable: true, filter: true, suppressSizeToFit: true },
         { headerName: 'Shipping Address', field: 'shipping_address', sortable: true, filter: true, suppressSizeToFit: true }
     ],

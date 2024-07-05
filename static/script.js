@@ -60,6 +60,14 @@ function currencyFormatter(params) {
     return '$' + params.value.toFixed(2);
 }
 
+function emailValueFormatter(params) {
+    const email = params.value;
+    if (email && email.includes("placeholder_")) {
+      return ''; // Return empty string if it contains "placeholder_"
+    }
+    return email; // Otherwise return the email as is
+}
+
 function deleteSale(saleId, url, gridApi) {
     $.ajax({
         url: "/sales/delete/" + saleId,
