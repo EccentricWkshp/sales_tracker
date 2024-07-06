@@ -31,6 +31,10 @@
                 <input type="email" id="email" name="email">
             </div>
             <div class="form-group">
+                <label for="email">Email 2</label>
+                <input type="email" id="email_2" name="email_2">
+            </div>
+            <div class="form-group">
                 <label for="phone">Phone</label>
                 <input type="phone" id="phone" name="phone">
             </div>
@@ -200,6 +204,7 @@ function editCustomer(customerId) {
         $("#name").val(data.name);
         $("#company").val(data.company);
         $("#email").val(data.email);
+        $("#email_2").val(data.email_2);
         $("#phone").val(data.phone);
         $("#billing_address").val(data.billing_address);
         $("#shipping_address").val(data.shipping_address);
@@ -299,6 +304,7 @@ $(document).ready(function() {
                 name: $("#name").val(),
                 company: $("#company").val(),
                 email: $("#email").val(),
+                email_2: $("#email_2").val(),
                 phone: $("#phone").val(),
                 billing_address: $("#billing_address").val(),
                 shipping_address: $("#shipping_address").val()

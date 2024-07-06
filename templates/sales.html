@@ -239,6 +239,11 @@ $(document).ready(function() {
     addBtn.click(function() {
         $("#modalTitle").text("Add Sale");
         form[0].reset();
+        $('#customer').select2({
+            placeholder: 'Select a customer',
+            allowClear: true,
+            width: '400px'
+        });
         $("#saleId").val("");
         $("#lineItems").empty();
         lineItemCount = 0;

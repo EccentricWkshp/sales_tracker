@@ -396,6 +396,7 @@ def add_customer():
         name=data['name'],
         company=data['company'],
         email=data['email'],
+        email_2=datea['email_2'],
         phone=data['phone'],
         billing_address=data['billing_address'],
         shipping_address=data['shipping_address']
@@ -413,6 +414,7 @@ def edit_customer(id):
     customer.name = data['name']
     customer.company = data['company']
     customer.email = data['email']
+    customer.email_2 = data['email_2']
     customer.phone = data['phone']
     customer.billing_address = data['billing_address']
     customer.shipping_address = data['shipping_address']
@@ -428,6 +430,7 @@ def get_customer(id):
         'name': customer.name,
         'company': customer.company,
         'email': customer.email,
+        'email_2': customer.email_2,
         'phone': customer.phone,
         'billing_address': customer.billing_address,
         'shipping_address': customer.shipping_address
