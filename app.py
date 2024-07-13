@@ -132,6 +132,8 @@ class SalesReceipt(db.Model):
     shipstation_order_id = db.Column(db.String(50), unique=True, nullable=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
     customer_name = db.relationship('Customer', backref='sales_receipts', lazy=True)
+    shipservice = db.Column(db.String(50))
+    tracking = db.Column(db.String(50))
     date = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp())
     total = db.Column(db.Float, nullable=False)
     tax = db.Column(db.Float, nullable=False)
@@ -144,6 +146,8 @@ class SalesReceipt(db.Model):
             'shipstation_order_id': self.shipstation_order_id,
             'customer_id': self.customer_id,
             'customer_name': self.customer.name if self.customer else None,
+            'shipservice': self.shipservice,
+            'tracking': self.tracking,
             'date': self.date.strftime('%m-%d-%Y'),
             'total': self.total,
             'tax': self.tax,
@@ -178,6 +182,11 @@ class ShipStationCustomerMapping(db.Model):
     customer = db.relationship('Customer', back_populates='shipstation_mapping')
 
 class ShipStationCredentials(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    api_key = db.Column(db.String(100), nullable=False)
+    api_secret = db.Column(db.String(100), nullable=False)
+
+class WooCommerceCredentials(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     api_key = db.Column(db.String(100), nullable=False)
     api_secret = db.Column(db.String(100), nullable=False)
@@ -261,6 +270,7 @@ def logout():
 def management():
     company_info = CompanyInfo.get_info()
     shipstation_credentials = ShipStationCredentials.query.first()
+    woocommerce_credentials = WooCommerceCredentials.query.first()
 
     if request.method == 'POST':
         if 'logo' in request.files:
@@ -292,12 +302,22 @@ def management():
             db.session.add(new_info)
 
         if shipstation_credentials:
-            shipstation_credentials.api_key = request.form['api_key']
-            shipstation_credentials.api_secret = request.form['api_secret']
+            shipstation_credentials.api_key = request.form['ss_api_key']
+            shipstation_credentials.api_secret = request.form['ss_api_secret']
         else:
             new_credentials = ShipStationCredentials(
-                api_key=request.form['api_key'],
-                api_secret=request.form['api_secret']
+                api_key=request.form['ss_api_key'],
+                api_secret=request.form['ss_api_secret']
+            )
+            db.session.add(new_credentials)
+
+        if woocommerce_credentials:
+            woocommerce_credentials.api_key = request.form['wc_api_key']
+            woocommerce_credentials.api_secret = request.form['wc_api_secret']
+        else:
+            new_credentials = WooCommerceCredentials(
+                api_key=request.form['wc_api_key'],
+                api_secret=request.form['wc_api_secret']
             )
             db.session.add(new_credentials)
 
@@ -310,7 +330,7 @@ def management():
 
         return redirect(url_for('management'))
 
-    return render_template('management.html', company_info=company_info, shipstation_credentials=shipstation_credentials)
+    return render_template('management.html', company_info=company_info, shipstation_credentials=shipstation_credentials, woocommerce_credentials=woocommerce_credentials)
 
 @app.route('/state_taxes')
 @login_required
@@ -499,6 +519,8 @@ def get_customer_orders(id):
         order_data.append({
             'id': order.id,
             'date': order.date.strftime('%Y-%m-%d'),
+            'shipservice': order.shipservice,
+            'tracking': order.tracking,
             'total': float(order.total),
             'tax': float(order.tax),
             'shipping': float(order.shipping),
@@ -596,6 +618,8 @@ def add_sale():
     data = request.json
     new_sale = SalesReceipt(
         customer_id=data['customer_id'],
+        shipservice=data['shipservice'],
+        tracking=data['tracking'],
         date=datetime.utcnow(),
         total=float(data['total']),
         tax=float(data['tax']),
@@ -630,6 +654,8 @@ def get_sale(id):
         'customer_email': sale.customer_email,
         'customer_phone': sale.customer_phone,
         'customer_company': sale.customer.company,
+        'shipservice': sale.shipservice,
+        'tracking': sale.tracking,
         'date': sale.date.strftime('%m-%d-%Y'),
         'subtotal': float(sale.total - sale.tax - sale.shipping),
         'tax': float(sale.tax),
@@ -658,6 +684,8 @@ def edit_sale(id):
 
             # Update sale details
             sale.customer_id = int(request.form['customer_id'])
+            sale.shipservice = request.form['shipservice']
+            sale.tracking = request.form['tracking']
             sale.date = datetime.strptime(request.form['date'], '%Y-%m-%dT%H:%M')
             sale.shipping = Decimal(request.form['shipping'])
             sale.tax = Decimal(request.form['tax'])
@@ -810,11 +838,14 @@ def fetch_shipstation_orders():
         try:
             with db.session.begin_nested():
                 customer = get_or_create_customer(order['customer'])
+                shipment = fetch_shipstation_shipment(order['order_id'], internal_call=True)
                 
                 existing_sale = SalesReceipt.query.filter_by(shipstation_order_id=order['sales_receipt_number']).first()
                 
                 if existing_sale:
                     # Update existing sale
+                    #existing_sale.shipservice = shipment['shipments'][0]['serviceCode']  # TODO: need to parse chars before _ as shipservice ("serviceCode": "usps_first_class_mail",)
+                    existing_sale.tracking = shipment['shipments'][0]['trackingNumber']
                     #existing_sale.customer_id = customer.id
                     #existing_sale.date = order['sales_receipt_date']
                     #existing_sale.total = order['order_total']
@@ -825,6 +856,8 @@ def fetch_shipstation_orders():
                     # Create a new sale
                     new_sale = SalesReceipt(
                         customer_id=customer.id,
+                        #shipservice=shipment['shipments'][0]['serviceCode'],  # TODO: need to parse chars before _ as shipservice ("serviceCode": "usps_first_class_mail",)
+                        tracking=shipment['shipments'][0]['trackingNumber'],
                         date=order['sales_receipt_date'],
                         total=order['order_total'],
                         tax=order['tax_amount'],
@@ -862,6 +895,38 @@ def fetch_shipstation_orders():
         error_msg = f'Error committing changes to database: {str(e)}'
         app.logger.error(error_msg)
         return jsonify({'error': error_msg}), 500
+
+@app.route('/shipstation/fetch_shipment/<int:id>')
+@login_required
+def fetch_shipstation_shipment(id, internal_call=False):
+    credentials = ShipStationCredentials.query.first()
+    if not credentials:
+        return jsonify({'error': 'ShipStation credentials not found'}), 400
+    
+    orderId = id
+    
+    if not orderId:
+        return jsonify({'error': 'Order IDs are required'}), 400
+    
+    api_url = 'https://ssapi.shipstation.com/shipments'
+
+    while True:
+        params = {
+            'orderId': orderId,
+            'includeShipmentItems': True
+        }
+        
+        try:
+            response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
+            response.raise_for_status()
+            shipments = response.json()
+            
+            #shipments = data.get('shipments', [])
+            return (jsonify(shipments), 200) if not internal_call else (shipments)
+            
+        except requests.RequestException as e:
+            app.logger.error(f"Error fetching shipments from ShipStation: {str(e)}")
+            return jsonify({'error': 'Error fetching shipments from ShipStation'}), 500
 
 # Functions
 def format_name(name):
@@ -1169,4 +1234,4 @@ app.cli.add_command(create_admin)
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True, port=4444)
+    app.run(debug=True, host="0.0.0.0", port=4444)

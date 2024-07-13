@@ -8,7 +8,7 @@
     <div class="invoice-header">
         <h1 class="invoice-title">Sales Receipt #{{ sale.shipstation_order_id }}</h1>
         <div class="invoice-details">
-            <p><strong>Date:</strong> {{ sale.date.strftime('%Y-%m-%d') }}</p>
+            <p><strong>Date:</strong> {{ sale.date.strftime('%m-%d-%Y') }}</p>
             <p><strong>Order ID:</strong> {{ sale.shipstation_order_id }}</p>
         </div>
     </div>
@@ -29,6 +29,17 @@
         <div class="shipping-address">
             <h3>Shipping Address</h3>
             <p>{{ sale.customer.shipping_address | nl2br }}</p>
+        </div>
+    </div>
+
+    <div class="shipping-info">
+        <div class="shipservice">
+            <h3>Shipping</h3>
+            <p>{{ sale.shipservice if sale.shipservice else '' }}</p>
+        </div>
+        <div class="tracking">
+            <h3>Tracking</h3>
+            <p>{{ sale.tracking if sale.tracking else '' }}</p>
         </div>
     </div>
 

@@ -43,6 +43,18 @@
         .address-info div {
             flex-basis: 48%;
         }
+        .shipping-info {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .shipservice, .tracking {
+            width: 48%;
+        }
+        .shipservice-label, .tracking-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -110,6 +122,17 @@
             <h3>Ship To:</h3>
             {{ sale.customer.name }}<br>
             {{ sale.customer.shipping_address | nl2br }}
+        </div>
+    </div>
+
+    <div class="shipping-info">
+        <div class="shipservice">
+            <h3>Shipping</h3>
+            <p>{{ sale.shipservice if sale.shipservice else '' }}</p>
+        </div>
+        <div class="tracking">
+            <h3>Tracking</h3>
+            <p>{{ sale.tracking if sale.tracking else '' }}</p>
         </div>
     </div>
 

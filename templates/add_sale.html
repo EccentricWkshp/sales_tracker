@@ -21,6 +21,21 @@
                     {% endfor %}
                 </select>
             </div>
+            <div class="form-group">
+                <label for="shipservice">Shipping:</label>
+                <select type="text" id="shipservice" name="shipservice">
+                    <option value=""></option>
+                    <option value="USPS">USPS</option>
+                    <option value="UPS">UPS</option>
+                    <option value="FedEx">FedEx</option>
+                    <option value="DHL">DHL</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="tracking">Tracking</label>
+                <input type="text" id="tracking" name="tracking">
+            </div>
             <div id="lineItems">
                 <!-- Line items will be added here dynamically -->
             </div>

@@ -7,7 +7,7 @@
     <div class="invoice-header">
         <h1 class="invoice-title">Edit Sales Receipt #{{ sale.shipstation_order_id }}</h1>
         <div class="invoice-details">
-            <p><strong>Date:</strong> {{ sale.date.strftime('%Y-%m-%d') }}</p>
+            <p><strong>Date:</strong> {{ sale.date.strftime('%m-%d-%Y') }}</p>
             <p><strong>Order ID:</strong> {{ sale.shipstation_order_id }}</p>
         </div>
     </div>
@@ -38,6 +38,24 @@
             <div class="shipping-address">
                 <p class="address-label">Shipping Address:</p>
                 <textarea id="shipping_address" name="shipping_address" rows="4" readonly>{{ sale.customer.name + '\n' + sale.customer.shipping_address }}</textarea>
+            </div>
+        </div>
+
+        <div class="shipping-info">
+            <div class="shipservice">
+                <p class="shipservice-label">Shipping:</p>
+                <select type="text" id="shipservice" name="shipservice">
+                    <option value="" {{ "selected" if not sale.shipservice }}></option>
+                    <option value="USPS" {{ "selected" if sale.shipservice == "USPS" else "" }}>USPS</option>
+                    <option value="UPS" {{ "selected" if sale.shipservice == "UPS" else "" }}>UPS</option>
+                    <option value="FedEx" {{ "selected" if sale.shipservice == "FedEx" else "" }}>FedEx</option>
+                    <option value="DHL" {{ "selected" if sale.shipservice == "DHL" else "" }}>DHL</option>
+                    <option value="Other" {{ "selected" if sale.shipservice == "Other" else "" }}>Other</option>
+                </select>
+            </div>
+            <div class="tracking">
+                <p class="tracking-label">Tracking: </p>
+                <input type="text" id="tracking" name="tracking" value="{{ sale.tracking if sale.tracking else '' }}">
             </div>
         </div>
         

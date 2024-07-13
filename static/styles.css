@@ -309,6 +309,21 @@ tr:hover {
     margin-bottom: 5px;
 }
 
+.shipping-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.shipservice, .tracking {
+    width: 48%;
+}
+
+.shipservice-label, .tracking-label {
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
 .line-items {
     margin-bottom: 20px;
 }

@@ -34,12 +34,22 @@
 
         <h2>ShipStation Settings</h2>
         <div class="form-group">
-            <label for="api_key">API Key</label>
-            <input type="text" id="api_key" name="api_key" class="form-control" value="{{ shipstation_credentials.api_key if shipstation_credentials else '' }}" required>
+            <label for="ss_api_key">API Key</label>
+            <input type="text" id="ss_api_key" name="ss_api_key" class="form-control" value="{{ shipstation_credentials.api_key if shipstation_credentials else '' }}" required>
         </div>
         <div class="form-group">
-            <label for="api_secret">API Secret</label>
-            <input type="password" id="api_secret" name="api_secret" class="form-control" value="{{ shipstation_credentials.api_secret if shipstation_credentials else '' }}" required>
+            <label for="ss_api_secret">API Secret</label>
+            <input type="password" id="ss_api_secret" name="ss_api_secret" class="form-control" value="{{ shipstation_credentials.api_secret if shipstation_credentials else '' }}" required>
+        </div>
+
+        <h2>WooCommerce Settings</h2>
+        <div class="form-group">
+            <label for="wc_api_key">API Key</label>
+            <input type="text" id="wc_api_key" name="wc_api_key" class="form-control" value="{{ woocommerce_credentials.api_key if woocommerce_credentials else '' }}">
+        </div>
+        <div class="form-group">
+            <label for="wc_api_secret">API Secret</label>
+            <input type="password" id="wc_api_secret" name="wc_api_secret" class="form-control" value="{{ woocommerce_credentials.api_secret if woocommerce_credentials else '' }}">
         </div>
 
         <button type="submit" class="btn btn-primary">Save Settings</button>
