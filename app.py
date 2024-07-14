@@ -846,11 +846,16 @@ def fetch_shipstation_orders():
                 customer = get_or_create_customer(order['customer'])
                 shipment = fetch_shipstation_shipment(order['order_id'], internal_call=True)
                 
+                # Split serviceCode into parts so we can get the carrier only
+                serviceCodeParts = shipment['shipments'][0]['serviceCode'].split('_')
+                # Capitalize the first part
+                serviceCodeParts[0] = serviceCodeParts[0].upper()
+                
                 existing_sale = SalesReceipt.query.filter_by(shipstation_order_id=order['sales_receipt_number']).first()
                 
                 if existing_sale:
                     # Update existing sale
-                    #existing_sale.shipservice = shipment['shipments'][0]['serviceCode']  # TODO: need to parse chars before _ as shipservice ("serviceCode": "usps_first_class_mail",)
+                    existing_sale.shipservice = serviceCodeParts[0]
                     existing_sale.tracking = shipment['shipments'][0]['trackingNumber']
                     existing_sale.shipdate = datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date()
                     #existing_sale.customer_id = customer.id
@@ -863,7 +868,7 @@ def fetch_shipstation_orders():
                     # Create a new sale
                     new_sale = SalesReceipt(
                         customer_id=customer.id,
-                        #shipservice=shipment['shipments'][0]['serviceCode'],  # TODO: need to parse chars before _ as shipservice ("serviceCode": "usps_first_class_mail",)
+                        shipservice=serviceCodeParts[0],
                         tracking=shipment['shipments'][0]['trackingNumber'],
                         shipdate=datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date(),
                         date=order['sales_receipt_date'],
