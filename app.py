@@ -942,6 +942,69 @@ def fetch_shipstation_shipment(id, internal_call=False):
             app.logger.error(f"Error fetching shipments from ShipStation: {str(e)}")
             return jsonify({'error': 'Error fetching shipments from ShipStation'}), 500
 
+@app.route('/shipstation/update_shipment/<int:id>')
+@login_required
+def update_shipment(id):
+    credentials = ShipStationCredentials.query.first()
+    if not credentials:
+        return jsonify({'error': 'ShipStation credentials not found'}), 400
+    
+    orderId = id
+    errors = []
+    
+    if not orderId:
+        return jsonify({'error': 'Order IDs are required'}), 400
+    
+    api_url = 'https://ssapi.shipstation.com/shipments'
+
+    params = {
+        'orderId': orderId,
+        'includeShipmentItems': True
+    }
+    
+    try:
+        response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
+        response.raise_for_status()
+        shipments = response.json()
+
+    except requests.RequestException as e:
+        app.logger.error(f"Error fetching shipments from ShipStation: {str(e)}")
+        return jsonify({'error': 'Error fetching shipments from ShipStation'}), 500
+    
+    try:
+        with db.session.begin_nested():           
+            # Split serviceCode into parts so we can get the carrier only
+            serviceCodeParts = shipments['shipments'][0]['serviceCode'].split('_')
+            # Capitalize the first part
+            serviceCodeParts[0] = serviceCodeParts[0].upper()
+            sale = SalesReceipt.query.filter_by(id=id).first()
+
+            # Update sale
+            sale.shipservice = serviceCodeParts[0]
+            sale.tracking = shipments['shipments'][0]['trackingNumber']
+            sale.shipdate = datetime.strptime(shipments['shipments'][0]['shipDate'], '%Y-%m-%d').date()           
+
+    except Exception as e:
+        db.session.rollback()
+        error_msg = f"Error processing order {id}: {str(e)}"
+        app.logger.error(error_msg)
+        errors.append(error_msg)
+
+    try:
+        db.session.commit()
+        message = (f'Successfully updated order {id}.')
+        if errors:
+            message += f' Encountered {len(errors)} errors.'
+        
+        app.logger.info(message)
+        return view_sale(id), 200 if not errors else 207  # Use 207 Multi-Status if there were some errors
+    
+    except IntegrityError as e:
+        db.session.rollback()
+        error_msg = f'Error committing changes to database: {str(e)}'
+        app.logger.error(error_msg)
+        return jsonify({'error': error_msg}), 500
+
 # Functions
 def format_name(name):
     if not name:
