@@ -19,7 +19,7 @@
             <input type="hidden" id="saleId" name="id">
             <div class="form-group">
                 <label for="date">Date</label>
-                <input type="datetime-local" id="date" name="date">
+                <input type="date" id="date" name="date">
             </div>
             <div class="form-group">
                 <label for="customer">Customer</label>
@@ -457,6 +457,10 @@ $(document).ready(function() {
             method: "POST",
             data: JSON.stringify({
                 customer_id: $("#customer").val(),
+                date: $("#date").val(),
+                shipservice: $("#shipservice").val(),
+                shipdate: $("#shipdate").val(),
+                tracking: $("#tracking").val(),
                 line_items: lineItems,
                 subtotal: currencyInputs.subtotal.getRawValue(),
                 tax: currencyInputs.tax.getRawValue(),

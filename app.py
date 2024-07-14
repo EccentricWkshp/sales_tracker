@@ -147,9 +147,9 @@ class SalesReceipt(db.Model):
             'shipstation_order_id': self.shipstation_order_id,
             'customer_id': self.customer_id,
             'customer_name': self.customer.name if self.customer else None,
-            'shipservice': self.shipservice,
-            'tracking': self.tracking,
-            'shipdate': self.shipdate.strftime('%m-%d-%Y'),
+            'shipservice': self.shipservice if self.shipservice else None,
+            'tracking': self.tracking if self.tracking else None,
+            'shipdate': self.shipdate.strftime('%m-%d-%Y') if self.shipdate else None,
             'date': self.date.strftime('%m-%d-%Y'),
             'total': self.total,
             'tax': self.tax,
@@ -619,12 +619,13 @@ def sales():
 @login_required
 def add_sale():
     data = request.json
+
     new_sale = SalesReceipt(
         customer_id=data['customer_id'],
-        shipservice=data['shipservice'],
-        tracking=data['tracking'],
-        shipdate=data['shipdate'],
-        date=datetime.utcnow(),
+        shipservice=data.get('shipservice', None),
+        tracking=data.get('tracking', None),
+        shipdate=datetime.strptime(data['shipdate'], '%Y-%m-%d').date() if data.get('shipdate') else None,
+        date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
         total=float(data['total']),
         tax=float(data['tax']),
         shipping=float(data['shipping'])
