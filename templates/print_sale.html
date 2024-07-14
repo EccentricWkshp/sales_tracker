@@ -116,11 +116,13 @@
     <div class="address-info">
         <div>
             <h3>Bill To:</h3>
+            {% if sale.customer.company %}{{ sale.customer.company }}<br>{% endif %}
             {{ sale.customer.name }}<br>
             {{ sale.customer.billing_address | nl2br }}
         </div>
         <div>
             <h3>Ship To:</h3>
+            {% if sale.customer.company %}{{ sale.customer.company }}<br>{% endif %}
             {{ sale.customer.name }}<br>
             {{ sale.customer.shipping_address | nl2br }}
         </div>

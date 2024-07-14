@@ -16,6 +16,7 @@
     <div class="customer-info">
         <div class="customer-details">
             <h3>Customer Information</h3>
+            {% if sale.customer.company %}<p><strong>Company:</strong> {{ sale.customer.company }}</p>{% endif %}
             <p><strong>Name:</strong> {{ sale.customer.name }}</p>
             <p><strong>Email:</strong> {{ sale.customer.email }}</p>
         </div>

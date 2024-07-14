@@ -306,7 +306,7 @@ tr:hover {
 }
 
 .billing-address, .shipping-address {
-    width: 48%;
+    width: 50%;
 }
 
 .address-label {
