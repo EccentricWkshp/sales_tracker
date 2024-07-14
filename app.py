@@ -966,6 +966,8 @@ def update_shipment(id):
         response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
         response.raise_for_status()
         shipments = response.json()
+        if not shipments.get('shipments'):
+            return view_sale(id), 404
 
     except requests.RequestException as e:
         app.logger.error(f"Error fetching shipments from ShipStation: {str(e)}")
