@@ -48,10 +48,10 @@
             justify-content: space-between;
             margin-bottom: 20px;
         }
-        .shipservice, .tracking {
-            width: 48%;
+        .shipservice, .shipdate, .tracking {
+            width: 30%;
         }
-        .shipservice-label, .tracking-label {
+        .shipservice-label, .shipdate-label, .tracking-label {
             font-weight: bold;
             margin-bottom: 5px;
         }
@@ -129,6 +129,10 @@
         <div class="shipservice">
             <h3>Shipping</h3>
             <p>{{ sale.shipservice if sale.shipservice else '' }}</p>
+        </div>
+        <div class="shipdate">
+            <h3>Ship Date</h3>
+            <p>{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}</p>
         </div>
         <div class="tracking">
             <h3>Tracking</h3>

@@ -53,6 +53,10 @@
                     <option value="Other" {{ "selected" if sale.shipservice == "Other" else "" }}>Other</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label for="shipdate">Ship Date:</label>
+                <input type="date" id="shipdate" name="shipdate" value="{{ sale.shipdate.strftime('%Y-%m-%d') if sale.shipdate else '' }}">
+            </div>
             <div class="tracking">
                 <p class="tracking-label">Tracking: </p>
                 <input type="text" id="tracking" name="tracking" value="{{ sale.tracking if sale.tracking else '' }}">

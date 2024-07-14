@@ -154,6 +154,11 @@ nav i {
     background-color: #c0392b;
 }
 
+.btn-close {
+    background-color: #3498db;
+    color: white;
+}
+
 .btn i {
     margin-right: 5px;
 }
@@ -315,11 +320,11 @@ tr:hover {
     margin-bottom: 20px;
 }
 
-.shipservice, .tracking {
-    width: 48%;
+.shipservice, .shipdate, .tracking {
+    width: 30%;
 }
 
-.shipservice-label, .tracking-label {
+.shipservice-label, .shipdate-label, .tracking-label {
     font-weight: bold;
     margin-bottom: 5px;
 }

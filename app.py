@@ -134,6 +134,7 @@ class SalesReceipt(db.Model):
     customer_name = db.relationship('Customer', backref='sales_receipts', lazy=True)
     shipservice = db.Column(db.String(50))
     tracking = db.Column(db.String(50))
+    shipdate = db.Column(db.Date)
     date = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp())
     total = db.Column(db.Float, nullable=False)
     tax = db.Column(db.Float, nullable=False)
@@ -148,6 +149,7 @@ class SalesReceipt(db.Model):
             'customer_name': self.customer.name if self.customer else None,
             'shipservice': self.shipservice,
             'tracking': self.tracking,
+            'shipdate': self.shipdate.strftime('%m-%d-%Y'),
             'date': self.date.strftime('%m-%d-%Y'),
             'total': self.total,
             'tax': self.tax,
@@ -521,6 +523,7 @@ def get_customer_orders(id):
             'date': order.date.strftime('%Y-%m-%d'),
             'shipservice': order.shipservice,
             'tracking': order.tracking,
+            'shipdate': order.shipdate,
             'total': float(order.total),
             'tax': float(order.tax),
             'shipping': float(order.shipping),
@@ -620,6 +623,7 @@ def add_sale():
         customer_id=data['customer_id'],
         shipservice=data['shipservice'],
         tracking=data['tracking'],
+        shipdate=data['shipdate'],
         date=datetime.utcnow(),
         total=float(data['total']),
         tax=float(data['tax']),
@@ -656,6 +660,7 @@ def get_sale(id):
         'customer_company': sale.customer.company,
         'shipservice': sale.shipservice,
         'tracking': sale.tracking,
+        'shipdate': sale.shipdate.strftime('%m-%d-%Y'),
         'date': sale.date.strftime('%m-%d-%Y'),
         'subtotal': float(sale.total - sale.tax - sale.shipping),
         'tax': float(sale.tax),
@@ -686,6 +691,7 @@ def edit_sale(id):
             sale.customer_id = int(request.form['customer_id'])
             sale.shipservice = request.form['shipservice']
             sale.tracking = request.form['tracking']
+            sale.shipdate = datetime.strptime(request.form['shipdate'],  '%Y-%m-%d')
             sale.date = datetime.strptime(request.form['date'], '%Y-%m-%dT%H:%M')
             sale.shipping = Decimal(request.form['shipping'])
             sale.tax = Decimal(request.form['tax'])
@@ -846,6 +852,7 @@ def fetch_shipstation_orders():
                     # Update existing sale
                     #existing_sale.shipservice = shipment['shipments'][0]['serviceCode']  # TODO: need to parse chars before _ as shipservice ("serviceCode": "usps_first_class_mail",)
                     existing_sale.tracking = shipment['shipments'][0]['trackingNumber']
+                    existing_sale.shipdate = datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date()
                     #existing_sale.customer_id = customer.id
                     #existing_sale.date = order['sales_receipt_date']
                     #existing_sale.total = order['order_total']
@@ -858,6 +865,7 @@ def fetch_shipstation_orders():
                         customer_id=customer.id,
                         #shipservice=shipment['shipments'][0]['serviceCode'],  # TODO: need to parse chars before _ as shipservice ("serviceCode": "usps_first_class_mail",)
                         tracking=shipment['shipments'][0]['trackingNumber'],
+                        shipdate=datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date(),
                         date=order['sales_receipt_date'],
                         total=order['order_total'],
                         tax=order['tax_amount'],
@@ -881,7 +889,8 @@ def fetch_shipstation_orders():
     try:
         db.session.commit()
         message = (f'Successfully processed {len(processed_orders)} orders from ShipStation. '
-                   f'Created {orders_created} new orders and created {customers_created} new customers.')
+                   f'Created {orders_created} new orders and created {customers_created} new customers.'
+                   f'Updated {orders_updated} existing orders.')
         if errors:
             message += f' Encountered {len(errors)} errors.'
         

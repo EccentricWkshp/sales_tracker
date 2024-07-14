@@ -37,6 +37,10 @@
             <h3>Shipping</h3>
             <p>{{ sale.shipservice if sale.shipservice else '' }}</p>
         </div>
+        <div class="shipdate">
+            <h3>Ship Date</h3>
+            <p>{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}</p>
+        </div>
         <div class="tracking">
             <h3>Tracking</h3>
             <p>{{ sale.tracking if sale.tracking else '' }}</p>
@@ -92,7 +96,7 @@
 
     <div class="actions">
         <a href="{{ url_for('edit_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit Sale</a>
-        <a href="{{ url_for('print_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
+        <a href="{{ url_for('print_sale', id=sale.id) }}" target="_blank" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
         <a href="{{ url_for('sales') }}" class="btn btn-secondary"><i class="fas fa-arrow-left"></i> Back to Sales</a>
     </div>
 </div>

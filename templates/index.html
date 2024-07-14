@@ -92,6 +92,25 @@
                         return `${dateParts[0]}-${dateParts[1]}-${dateParts[2]}`;
                     }
                 },
+                {
+                    headerName: "Ship Date",
+                    field: "shipdate",
+                    filter: 'agDateColumnFilter',
+                    filterParams: {
+                        comparator: function(filterLocalDateAtMidnight, cellValue) {
+                            var dateParts = cellValue.split('-');
+                            var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
+
+                            if (cellDate < filterLocalDateAtMidnight) {
+                                return -1;
+                            } else if (cellDate > filterLocalDateAtMidnight) {
+                                return 1;
+                            } else {
+                                return 0;
+                            }
+                        }
+                    }
+                },
                 { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
                 { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator, flex: 1 },
             ],
@@ -100,6 +119,7 @@
                 {
                     id: {{ sale.id }},
                     date: '{{ sale.date.strftime('%m-%d-%Y') }}',
+                    shipdate: '{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}',
                     customer: '{{ sale.customer.name|cleaned }}',
                     total: '{{ "%.2f"|format(sale.total) }}'
                 },
