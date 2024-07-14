@@ -185,7 +185,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
             },
-            { headerName: 'Receipt #', field: 'shipstation_order_id', sortable: true, filter: true },
+            { headerName: 'Order #', field: 'shipstation_order_id', sortable: true, filter: true },
+            { headerName: 'Receipt #', field: 'id', sortable: true, filter: true },
             { headerName: 'Customer', field: 'customer_name', sortable: true, filter: true },
             { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
             { headerName: 'Tax', field: 'tax', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },

@@ -100,7 +100,8 @@
 
     <div class="invoice-details">
         <div>
-            <strong>Invoice #:</strong> {{ sale.shipstation_order_id }}<br>
+            <strong>Invoice #:</strong> {{ sale.id }}<br>
+            <strong>Order #:</strong> {{ sale.shipstation_order_id }}<br>
             <strong>Date:</strong> {{ sale.date.strftime('%B %d, %Y') }}<br>
         </div>
         <div>
