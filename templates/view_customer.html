@@ -25,11 +25,21 @@
 </div>
 
 <h2>Orders</h2>
+<button id="addSaleBtn" class="btn btn-primary" data-customer-id="{{ customer.id }}"><i class="fas fa-plus"></i> Add Sale</button>
 <div id="ordersGrid" class="ag-theme-alpine" style="width: 100%;"></div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+
+document.addEventListener('DOMContentLoaded', function() {
+    var addSaleBtn = document.getElementById('addSaleBtn');
+    addSaleBtn.addEventListener('click', function() {
+        var customerId = this.getAttribute('data-customer-id');
+        window.location.href = '{{ url_for("sales") }}?open_modal=true&customer_id=' + customerId;
+    });
+});
+
 document.addEventListener('DOMContentLoaded', function() {
     fetch('/api/customer_orders/{{ customer.id }}')
         .then(response => response.json())

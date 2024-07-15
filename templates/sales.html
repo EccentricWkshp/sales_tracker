@@ -79,8 +79,9 @@
 {% endblock %}
 
 {% block extra_scripts %}
+
 <script>
-document.addEventListener('DOMContentLoaded', function() {    
+document.addEventListener('DOMContentLoaded', function() {       
     var gridOptions = {
         autoSizeStrategy: {
             type: "fitCellContents",
@@ -223,8 +224,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
 
-    
-
     // Add event listener for the export button
     document.getElementById('exportSaleBtn').addEventListener('click', function() {
         var dateRange = getDateFilterRange();
@@ -242,11 +241,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
     var gridDiv = document.querySelector('#salesGrid');
     gridApi = agGrid.createGrid(gridDiv, gridOptions);
+
+
+
+    // Check if we need to open the modal with pre-populated customer
+    const urlParams = new URLSearchParams(window.location.search);
+    const openModal = urlParams.get('open_modal');
+    const customerId = urlParams.get('customer_id');
+    
+    if (openModal === 'true' && customerId) {
+        var modal = $("#saleModal");
+        $("#modalTitle").text("Add Sale");
+        
+        // Open the modal
+        modal.show();
+
+        // Set the customer in the Select2 dropdown
+        $('#customer').val(customerId).trigger('change');
+
+        // Optionally, if you want to disable changing the customer
+        // $('#customer').prop('disabled', true);
+    }
 });
 
-</script>
-
-<script>
 $(document).ready(function() {
     var modal = $("#saleModal");
     var addBtn = $("#addSaleBtn");
@@ -316,15 +333,18 @@ $(document).ready(function() {
     });
 
     closeBtn.click(function() {
+        $('#customer').prop('disabled', false);
         modal.hide();
     });
 
     closeBtn2.click(function() {
+        $('#customer').prop('disabled', false);
         modal.hide();
     });
 
     $(window).click(function(event) {
         if (event.target == modal[0]) {
+            $('#customer').prop('disabled', false);
             modal.hide();
         }
     });
@@ -470,11 +490,12 @@ $(document).ready(function() {
             contentType: "application/json",
             success: function(response) {
                 if (response.success) {
+                    $('#customer').prop('disabled', false);
                     modal.hide();
                     //location.reload();
                     setTimeout(function() {
                         refreshGrid('/api/sales', gridApi);
-                    }, 1500); // 3000 milliseconds = 3 seconds
+                    }, 1500); // 1500 milliseconds = 1.5 seconds
                 } else {
                     alert("Error saving sale");
                 }
