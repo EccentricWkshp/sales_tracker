@@ -1,0 +1,490 @@
+{% extends "base.html" %}
+{% block title %}Banking{% endblock %}
+{% block content %}
+
+<div class="container">
+    <h1>Banking/Transaction Management</h1>
+    
+    <ul class="nav nav-tabs mb-4">
+        <li class="nav-item">
+            <a class="nav-link" href="{{ url_for('state_taxes') }}">Taxes</a>
+        </li>
+    </ul>
+
+    <div class="row mb-4">
+        <div class="col">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Import Transactions</h5>
+                    <form id="uploadForm" enctype="multipart/form-data">
+                        <div class="form-group">
+                            <input type="file" class="form-control-file" id="csvFile" accept=".csv" required>
+                            <small class="form-text text-muted">Upload a CSV file with bank transactions</small>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Upload Transactions</button>
+                        <button type="button" onclick="onBtExport()" class="btn btn-secondary ml-2">Export to CSV</button>
+                    </form>
+                    <div class="mt-2">
+                        <span id="selectedCount" class="badge badge-secondary">0</span> items selected
+                        <button id="deleteSelectedBtn" class="btn btn-danger btn-sm" style="display: none;">Delete Selected</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="uploadResult" class="alert" style="display: none;"></div>
+
+    <div id="transactionsGrid" class="ag-theme-alpine" style="height: 700px; width: 100%;"></div>
+</div>
+
+<!-- Receipt Link Modal -->
+<div class="modal fade" id="receiptLinkModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Link to Sales Receipt</h5>
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <select id="receiptSelect" class="form-control">
+                    <option value="">Select a receipt...</option>
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" id="linkReceiptBtn">Link Receipt</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// Declare gridOptions in the global scope
+let gridApi;
+
+function onBtExport() {
+    if (gridApi) {
+        gridApi.exportDataAsCsv({
+            fileName: 'bank_transactions.csv',
+            skipHeader: false,
+            skipFooters: true,
+            skipGroups: true
+        });
+    }
+}
+
+function refreshGrid() {
+    if (gridApi) {
+        fetch('/api/transactions')
+            .then(response => response.json())
+            .then(data => {
+                console.log('Refreshing grid with data:', data);
+                gridApi.setGridOption('rowData', data);
+            })
+            .catch(error => {
+                console.error('Error refreshing grid:', error);
+            });
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    let selectedTransactionId = null;
+    const uploadBtn = document.getElementById('uploadBtn');
+    const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
+    const uploadResult = document.getElementById('uploadResult');
+    const fileInput = document.getElementById('transactionFile');
+    const selectedCount = document.getElementById('selectedCount');
+    
+    const gridOptions = {
+        columnDefs: [
+            {
+                headerName: '',
+                field: 'actions',
+                width: 75,
+                pinned: 'left',
+                cellRenderer: params => {
+                    return `<button class="btn btn-link text-danger delete-btn" data-id="${params.data.id}">
+                        <i class="fas fa-trash"></i></button>`;
+                },
+                sortable: false,
+                filter: false
+            },
+            {
+                field: 'date',
+                headerName: 'Date',
+                sortable: true,
+                filter: 'agDateColumnFilter',
+                filterParams: {
+                    comparator: function(filterLocalDateAtMidnight, cellValue) {
+                        const dateAsString = cellValue;
+                        if (!dateAsString) return -1;
+                        const dateParts = dateAsString.split('-');
+                        const cellDate = new Date(
+                            Number(dateParts[0]),
+                            Number(dateParts[1]) - 1,
+                            Number(dateParts[2])
+                        );
+                        if (filterLocalDateAtMidnight.getTime() === cellDate.getTime()) {
+                            return 0;
+                        }
+                        if (cellDate < filterLocalDateAtMidnight) {
+                            return -1;
+                        }
+                        if (cellDate > filterLocalDateAtMidnight) {
+                            return 1;
+                        }
+                    }
+                }
+            },
+            {
+                field: 'description',
+                headerName: 'Description',
+                sortable: true,
+                filter: 'agTextColumnFilter',
+                flex: 1
+            },
+            {
+                field: 'amount',
+                headerName: 'Amount',
+                sortable: true,
+                filter: 'agNumberColumnFilter',
+                valueFormatter: params => params.value ? `$${params.value.toFixed(2)}` : '',
+                cellClass: params => params.data.credit_debit === 'Credit' ? 'text-success' : 'text-danger'
+            },
+            {
+                field: 'credit_debit',
+                headerName: 'Type',
+                sortable: true,
+                filter: 'agTextColumnFilter'
+            },
+            {
+                field: 'transaction_type',
+                headerName: 'Transaction Type',
+                sortable: true,
+                filter: 'agTextColumnFilter'
+            },
+            {
+                field: 'category',
+                headerName: 'Category',
+                sortable: true,
+                filter: 'agTextColumnFilter',
+                editable: true
+            },
+            {
+                field: 'check_number',
+                headerName: 'Check #',
+                sortable: true,
+                filter: 'agTextColumnFilter'
+            },
+            {
+                field: 'receipt_number',
+                headerName: 'Receipt #',
+                sortable: true,
+                filter: 'agTextColumnFilter',
+                cellRenderer: params => {
+                    if (params.data.receipt_id) {
+                        return `<a href="/sales/view/${params.data.receipt_id}" target="_blank">${params.value}</a>`;
+                    }
+                    return '';
+                }
+            },
+            {
+                field: 'notes',
+                headerName: 'Notes',
+                sortable: true,
+                filter: 'agTextColumnFilter',
+                editable: true
+            },
+            {
+                headerName: 'Actions',
+                field: 'id',
+                sortable: false,
+                filter: false,
+                width: 100,
+                cellRenderer: params => {
+                    if (params.data.credit_debit === 'Credit' && !params.data.receipt_id) {
+                        return '<button class="btn btn-sm btn-primary link-receipt-btn">Link Receipt</button>';
+                    }
+                    return '';
+                }
+            }
+        ],
+        rowSelection: {
+            mode: "multiRow",
+            headerCheckbox: true,
+        },
+        defaultColDef: {
+            flex: 1,
+            //minWidth: 100,
+            resizable: true,
+            filterParams: {
+                buttons: ['reset', 'apply']
+            }
+        },
+        pagination: true,
+        paginationPageSize: 100,
+        paginationPageSizeSelector: [50, 100, 500, 1000, 2000, 10000],
+        suppressCellFocus: false,
+        enableCellTextSelection: true,
+        
+        onCellValueChanged: function(event) {
+            const data = {};
+            data[event.column.colId] = event.newValue;
+            
+            fetch(`/api/transaction/update/${event.data.id}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (!result.success) {
+                    console.error('Error updating transaction:', result.error);
+                    event.node.setDataValue(event.column.colId, event.oldValue);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                event.node.setDataValue(event.column.colId, event.oldValue);
+            });
+        },
+        onGridReady: function(params) {
+            console.log('Grid ready - fetching data');
+            gridApi = params.api;  // Store grid API reference
+            fetch('/api/transactions')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Received transaction data:', data);
+                    gridApi.setGridOption('rowData', data);
+                    gridApi.sizeColumnsToFit();
+                })
+                .catch(error => {
+                    console.error('Error loading transactions:', error);
+                });
+        },
+        onSelectionChanged: () => {
+            const selectedNodes = gridApi.getSelectedNodes();
+            const selectedCount = selectedNodes.length;
+            document.getElementById('selectedCount').textContent = selectedCount;
+            deleteSelectedBtn.style.display = selectedCount > 0 ? 'inline-block' : 'none';
+        }
+    };
+
+    // Initialize the grid
+    const gridDiv = document.querySelector('#transactionsGrid');
+    if (!gridDiv) {
+        console.error('Could not find grid div');
+        return;
+    }
+    
+    try {
+        agGrid.createGrid(gridDiv, gridOptions);
+        console.log('Grid initialized successfully');
+    } catch (error) {
+        console.error('Error initializing grid:', error);
+    }
+
+    // Handle file upload
+    document.getElementById('uploadForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const formData = new FormData();
+        const fileInput = document.getElementById('csvFile');
+        formData.append('file', fileInput.files[0]);
+
+        fetch('/finance/upload_transactions', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(result => {
+            const resultDiv = document.getElementById('uploadResult');
+            resultDiv.style.display = 'block';
+            
+            if (result.success) {
+                resultDiv.className = 'alert alert-success';
+                resultDiv.textContent = result.message;
+                refreshGrid();
+            } else {
+                resultDiv.className = 'alert alert-danger';
+                resultDiv.textContent = result.error;
+            }            
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            const resultDiv = document.getElementById('uploadResult');
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'alert alert-danger';
+            resultDiv.textContent = 'Error uploading file';
+        });
+    });
+
+    // Handle receipt linking
+    gridDiv.addEventListener('click', function(e) {
+        var modal = $("#receiptLinkModal");
+
+        if (e.target.classList.contains('link-receipt-btn')) {
+            const row = e.target.closest('.ag-row');
+            if (row) {
+                const rowId = row.getAttribute('row-id');
+                const rowData = gridApi.getDisplayedRowAtIndex(Number(rowId)).data;
+                selectedTransactionId = rowData.id;
+                
+                // Fetch and populate receipts
+                fetch('/api/sales')
+                    .then(response => response.json())
+                    .then(receipts => {
+                        const select = document.getElementById('receiptSelect');
+                        select.innerHTML = '<option value="">Select a receipt...</option>';
+                        receipts.forEach(receipt => {
+                            select.innerHTML += `<option value="${receipt.id}">${receipt.id} - ${receipt.date} - ${receipt.customer_name} - $${receipt.total.toFixed(2)}</option>`;
+                        });
+                        modal.show();
+                    });
+            }
+        }
+    });
+
+    // Handle receipt link submission
+    document.getElementById('linkReceiptBtn').addEventListener('click', function() {
+        var modal = $("#receiptLinkModal");
+
+        const receiptId = document.getElementById('receiptSelect').value;
+        if (!receiptId) {
+            alert('Please select a receipt');
+            return;
+        }
+
+        fetch(`/api/link_receipt/${selectedTransactionId}/${receiptId}`, {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.success) {
+                modal.hide();
+                refreshGrid();
+            } else {
+                alert('Error linking receipt: ' + result.error);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Error linking receipt');
+        });
+    });
+
+    // Delete selected transactions
+    if (deleteSelectedBtn) {
+        deleteSelectedBtn.addEventListener('click', async () => {
+            const selectedNodes = gridApi.getSelectedNodes();
+            if (selectedNodes.length === 0) return;
+
+            if (!confirm(`Are you sure you want to delete ${selectedNodes.length} transaction(s)?`)) {
+                return;
+            }
+
+            const ids = selectedNodes.map(node => node.data.id);
+
+            try {
+                const response = await fetch('/api/transactions/delete-multiple', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ ids })
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showAlert(`Successfully deleted ${ids.length} transaction(s)`, 'success');
+                    refreshGrid();
+                } else {
+                    showAlert(result.error, 'danger');
+                }
+            } catch (error) {
+                showAlert('Error deleting transactions: ' + error.message, 'danger');
+            }
+        });
+    }
+
+    // Single transaction delete handler
+    if (gridDiv) {
+        gridDiv.addEventListener('click', async (e) => {
+            const deleteBtn = e.target.closest('.delete-btn');
+            if (!deleteBtn) return;
+
+            const id = deleteBtn.dataset.id;
+            if (!confirm('Are you sure you want to delete this transaction?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/transactions/delete/${id}`, {
+                    method: 'DELETE'
+                });
+
+                if (response.ok) {
+                    showAlert('Transaction deleted successfully', 'success');
+                    refreshGrid();
+                } else {
+                    const result = await response.json();
+                    showAlert(result.error || 'Error deleting transaction', 'danger');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showAlert('Error deleting transaction: ' + error.message, 'danger');
+            }
+        });
+    }
+
+    async function refreshTransactions() {
+        try {
+            const response = await fetch('/api/transactions');
+            const data = await response.json();
+            gridApi.setGridOption('rowData', data);
+        } catch (error) {
+            showAlert('Error fetching transactions: ' + error.message, 'danger');
+        }
+    }
+
+    function showAlert(message, type) {
+        if (uploadResult) {
+            uploadResult.textContent = message;
+            uploadResult.className = `alert alert-${type}`;
+            uploadResult.style.display = 'block';
+            setTimeout(() => {
+                uploadResult.style.display = 'none';
+            }, 5000);
+        }
+    }
+
+});
+
+$(document).ready(function() {
+    var modal = $("#receiptLinkModal");
+    var closeBtn = $(".close");
+
+    closeBtn.click(function() {
+        modal.hide();
+    });
+
+    $(window).click(function(event) {
+        if (event.target == modal[0]) {
+            modal.hide();
+        }
+    });
+});
+
+</script>
+{% endblock %}

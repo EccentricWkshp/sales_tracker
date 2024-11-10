@@ -1,5 +1,7 @@
 # app.py
 import click
+from contextlib import contextmanager
+import csv
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
@@ -7,6 +9,7 @@ from flask.cli import with_appcontext
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
+import io
 import json
 import logging
 from markupsafe import Markup
@@ -14,11 +17,14 @@ import os
 import pycountry
 import pycountry_convert as pc
 import pytz
+import random
 import re
 import requests
-from sqlalchemy import and_, extract, func
+from sqlalchemy import and_, create_engine, extract, func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, sessionmaker
+from sqlalchemy.pool import QueuePool
+import time
 from urllib.parse import urlparse
 import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -32,12 +38,24 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 # Use environment variable for secret key, with a fallback for development
 app.config['SECRET_KEY'] = 'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db?timeout=20'
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'poolclass': QueuePool,
+    'pool_size': 10,
+    'max_overflow': 20,
+    'pool_timeout': 30,
+    'pool_recycle': 1800,
+}
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
+
+# Create a custom engine with a connection pool
+#engine = create_engine(app.config['SQLALCHEMY_DATABASE_URI'], poolclass=QueuePool, **app.config['SQLALCHEMY_ENGINE_OPTIONS'])
+Session = db.sessionmaker()
+
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
@@ -64,6 +82,33 @@ app.cli.add_command(create_admin)
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@contextmanager
+def session_scope():
+    session = Session()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+# Retry decorator
+def retry_on_db_lock(max_retries=3, delay=0.1):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except sqlite3.OperationalError as e:
+                    if "database is locked" in str(e) and attempt < max_retries - 1:
+                        time.sleep(delay * (2 ** attempt) + random.uniform(0, 0.1))
+                    else:
+                        raise
+        return wrapper
+    return decorator
 
 # Models
 class User(UserMixin, db.Model):
@@ -192,6 +237,35 @@ class WooCommerceCredentials(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     api_key = db.Column(db.String(100), nullable=False)
     api_secret = db.Column(db.String(100), nullable=False)
+
+class BankTransaction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.Date, nullable=False)
+    description = db.Column(db.String(200), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    credit_debit = db.Column(db.String(10))  # 'Credit' or 'Debit'
+    transaction_type = db.Column(db.String(50))  # 'ACH Credit', 'POS', 'ACH Debit', etc.
+    category = db.Column(db.String(100))
+    notes = db.Column(db.String(500))
+    check_number = db.Column(db.String(20))
+    receipt_id = db.Column(db.Integer, db.ForeignKey('sales_receipt.id'), nullable=True)
+    imported_at = db.Column(db.DateTime, default=datetime.utcnow)
+    receipt = db.relationship('SalesReceipt', backref='bank_transactions') # Relationship to SalesReceipt
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'date': self.date.strftime('%Y-%m-%d'),
+            'description': self.description,
+            'amount': float(self.amount),
+            'credit_debit': self.credit_debit,
+            'transaction_type': self.transaction_type,
+            'category': self.category,
+            'notes': self.notes,
+            'check_number': self.check_number,
+            'receipt_id': self.receipt_id,
+            'receipt_number': f"#{self.receipt.id}" if self.receipt else None
+        }
 
 # Filters
 @app.template_filter('nl2br')
@@ -775,10 +849,21 @@ def print_sale(id):
 @app.route('/api/sales')
 @login_required
 def get_SalesReceipt():
+    # Retrieve all sales receipts sorted by the 'date' field in descending order (newest first).
+    SalesReceipts = SalesReceipt.query.order_by(SalesReceipt.date.desc()).all()
+    SalesReceipts_dict = [SalesReceipt.to_dict() for SalesReceipt in SalesReceipts]
+
+    return jsonify(SalesReceipts_dict)
+
+'''
+@app.route('/api/sales')
+@login_required
+def get_SalesReceipt():
     SalesReceipts = SalesReceipt.query.all()
     SalesReceipts_dict = [SalesReceipt.to_dict() for SalesReceipt in SalesReceipts]
 
     return jsonify(SalesReceipts_dict)
+'''
 
 @app.route('/api/calculate_tax', methods=['POST'])
 @login_required
@@ -790,6 +875,7 @@ def calculate_tax():
 
 @app.route('/shipstation/fetch_orders', methods=['POST'])
 @login_required
+@retry_on_db_lock()
 def fetch_shipstation_orders():
     credentials = ShipStationCredentials.query.first()
     if not credentials:
@@ -843,8 +929,8 @@ def fetch_shipstation_orders():
 
     for order in processed_orders:
         try:
-            with db.session.begin_nested():
-                customer = get_or_create_customer(order['customer'])
+            with session_scope() as session:
+                customer = get_or_create_customer(order['customer'], session)
                 shipment = fetch_shipstation_shipment(order['order_id'], internal_call=True)
                 
                 # Split serviceCode into parts so we can get the carrier only
@@ -852,8 +938,9 @@ def fetch_shipstation_orders():
                 # Capitalize the first part
                 serviceCodeParts[0] = serviceCodeParts[0].upper()
                 
-                existing_sale = SalesReceipt.query.filter_by(shipstation_order_id=order['sales_receipt_number']).first()
-                
+                #existing_sale = SalesReceipt.query.filter_by(shipstation_order_id=order['sales_receipt_number']).first()
+                existing_sale = session.query(SalesReceipt).filter_by(shipstation_order_id=order['sales_receipt_number']).first()
+
                 if existing_sale:
                     # Update existing sale
                     existing_sale.shipservice = serviceCodeParts[0]
@@ -878,12 +965,13 @@ def fetch_shipstation_orders():
                         shipping=order['shipping_amount'],
                         shipstation_order_id=order['sales_receipt_number']
                     )
-                    db.session.add(new_sale)
+                    #db.session.add(new_sale)
+                    session.add(new_sale)
                     orders_created += 1
                 
                 # Process line items
                 sale = existing_sale or new_sale
-                process_line_items(sale, order['items'])
+                process_line_items(sale, order['items'], session)
 
         except Exception as e:
             db.session.rollback()
@@ -1007,6 +1095,172 @@ def update_shipment(id):
         error_msg = f'Error committing changes to database: {str(e)}'
         app.logger.error(error_msg)
         return jsonify({'error': error_msg}), 500
+
+@app.route('/finance')
+@login_required
+def finance():
+    company_info = CompanyInfo.get_info()
+    return render_template('finance.html', company_info=company_info)
+
+@app.route('/finance/banking')
+@login_required
+def banking():
+    company_info = CompanyInfo.get_info()
+    return render_template('banking.html', company_info=company_info)
+
+@app.route('/finance/upload_transactions', methods=['POST'])
+@login_required
+def upload_transactions():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file uploaded'}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+        
+    if not file.filename.endswith('.csv'):
+        return jsonify({'error': 'File must be CSV format'}), 400
+
+    try:
+        file_content = file.stream.read().decode("utf-8-sig")
+        stream = io.StringIO(file_content)
+        csv_data = csv.DictReader(stream)
+        
+        transactions = []
+        duplicates = 0
+        row_count = 0
+        
+        for row in csv_data:
+            row_count += 1
+            try:
+                date_str = row['Booking Date']
+                if not date_str:
+                    continue
+                    
+                try:
+                    date = datetime.strptime(date_str.strip(), '%m/%d/%Y').date()
+                except ValueError as e:
+                    continue
+                
+                amount_str = row['Amount']
+                if not amount_str:
+                    continue
+                    
+                try:
+                    amount = float(amount_str.strip().replace('$', '').replace(',', ''))
+                except ValueError:
+                    continue
+
+                transaction = BankTransaction(
+                    date=date,
+                    description=row['Description'].strip(),
+                    amount=amount,
+                    credit_debit=row['Credit Debit Indicator'].strip(),
+                    transaction_type=row['type'].strip(),
+                    category=row['Category'].strip(),
+                    check_number=row['Check Serial Number'].strip() if row['Check Serial Number'] else '',
+                    notes=''
+                )
+                
+                # Check for duplicates before adding
+                if not is_duplicate_transaction(transaction):
+                    db.session.add(transaction)
+                    transactions.append(transaction)
+                else:
+                    duplicates += 1
+                
+            except Exception as e:
+                app.logger.error(f"Row {row_count}: Error processing row: {str(e)}")
+                continue
+
+        if not transactions and duplicates == 0:
+            return jsonify({'error': 'No valid transactions could be processed from the file'}), 400
+            
+        db.session.commit()
+        return jsonify({
+            'success': True, 
+            'message': f'Successfully imported {len(transactions)} transactions. Skipped {duplicates} duplicate entries.'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'Error processing file: {str(e)}'}), 400
+
+@app.route('/api/link_receipt/<int:transaction_id>/<int:receipt_id>', methods=['POST'])
+@login_required
+def link_receipt(transaction_id, receipt_id):
+    try:
+        transaction = BankTransaction.query.get_or_404(transaction_id)
+        receipt = SalesReceipt.query.get_or_404(receipt_id)
+        
+        transaction.receipt_id = receipt_id
+        db.session.commit()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/transactions')
+@login_required
+def get_transactions():
+    try:
+        # Get all transactions ordered by date descending
+        transactions = BankTransaction.query.order_by(BankTransaction.date.desc()).all()
+        
+        # Convert to list of dictionaries
+        transactions_list = [transaction.to_dict() for transaction in transactions]
+        
+        return jsonify(transactions_list)
+    except Exception as e:
+        app.logger.error(f"Error fetching transactions: {str(e)}")
+        return jsonify({'error': f'Error fetching transactions: {str(e)}'}), 500
+
+@app.route('/api/transaction/update/<int:id>', methods=['POST'])
+@login_required
+def update_transaction(id):
+    transaction = BankTransaction.query.get_or_404(id)
+    data = request.json
+    
+    if 'category' in data:
+        transaction.category = data['category']
+    if 'notes' in data:
+        transaction.notes = data['notes']
+        
+    try:
+        db.session.commit()
+        return jsonify({'success': True})
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/transactions/delete/<int:id>', methods=['DELETE'])
+@login_required
+def delete_transaction(id):
+    try:
+        transaction = BankTransaction.query.get_or_404(id)
+        db.session.delete(transaction)
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/transactions/delete-multiple', methods=['POST'])
+@login_required
+def delete_multiple_transactions():
+    try:
+        transaction_ids = request.json.get('ids', [])
+        if not transaction_ids:
+            return jsonify({'error': 'No transaction IDs provided'}), 400
+            
+        BankTransaction.query.filter(BankTransaction.id.in_(transaction_ids)).delete(synchronize_session=False)
+        db.session.commit()
+        return jsonify({'success': True, 'count': len(transaction_ids)})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+
 
 # Functions
 def format_name(name):
@@ -1292,24 +1546,15 @@ def merge_customers(customer_id1, customer_id2):
         db.session.rollback()
         return False, f"Error merging customers: {str(e)}"
 
-# Create Admin User
-@click.command('create-admin')
-@with_appcontext
-@click.option('--username', prompt=True)
-@click.option('--password', prompt=True, hide_input=True, confirmation_prompt=True)
-def create_admin(username, password):
-    db.create_all()
-    user = User.query.filter_by(username=username).first()
-    if user:
-        click.echo(f"User {username} already exists.")
-    else:
-        new_user = User(username=username)
-        new_user.set_password(password)
-        db.session.add(new_user)
-        db.session.commit()
-        click.echo(f"Admin user {username} created successfully.")
-
-app.cli.add_command(create_admin)
+def is_duplicate_transaction(new_transaction):
+    """Check if a transaction already exists in the database"""
+    return BankTransaction.query.filter(
+        BankTransaction.date == new_transaction.date,
+        BankTransaction.description == new_transaction.description,
+        BankTransaction.amount == new_transaction.amount,
+        BankTransaction.transaction_type == new_transaction.transaction_type,
+        BankTransaction.check_number == new_transaction.check_number
+    ).first() is not None
 
 if __name__ == '__main__':
     with app.app_context():

@@ -1,6 +1,7 @@
 # Misc Testing
 ag-grid.html
 old_*.*
+*copy*
 
 # Database, JSON, and Misc File Types
 *.7z
@@ -13,6 +14,7 @@ old_*.*
 artifacts/
 static/uploads
 instance
+migrations/
 
 # Python venv
 venv/
