@@ -74,19 +74,12 @@ var gridOptions = {
     paginationPageSizeSelector: [100, 200, 500, 1000],
     rowSelection: 'multiple',
     onSelectionChanged: onSelectionChanged,
+    rowSelection: {
+        mode: "multiRow",
+        headerCheckbox: true,
+    },
     columnDefs: [
-        {
-            headerName: '',
-            field: 'checkbox',
-            headerCheckboxSelection: true,
-            checkboxSelection: true,
-            width: 40,
-            sortable: false,
-            filter: false,
-            resizable: false,
-            suppressAutoSize: true,
-            suppressSizeToFit: true
-        },
+        
         {
             headerName: '',
             field: 'delete',

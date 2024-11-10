@@ -143,7 +143,7 @@ class Customer(db.Model):
     billing_address = db.Column(db.String(200), nullable=False)
     shipping_address = db.Column(db.String(200), nullable=False)
     phone = db.Column(db.String(20))
-    sales = db.relationship('SalesReceipt', backref='customer', lazy=True)
+    sales = db.relationship('SalesReceipt', back_populates='customer', lazy=True)
     shipstation_mapping = db.relationship('ShipStationCustomerMapping', uselist=False, back_populates='customer')
 
     def to_dict(self):
@@ -176,7 +176,8 @@ class SalesReceipt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     shipstation_order_id = db.Column(db.String(50), unique=True, nullable=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
-    customer_name = db.relationship('Customer', backref='sales_receipts', lazy=True)
+    #customer_name = db.relationship('Customer', backref='sales_receipts', lazy=True)
+    customer = db.relationship('Customer', back_populates='sales', lazy=True)
     shipservice = db.Column(db.String(50))
     tracking = db.Column(db.String(50))
     shipdate = db.Column(db.Date)
@@ -492,7 +493,7 @@ def add_customer():
         name=data['name'],
         company=data['company'],
         email=data['email'],
-        email_2=datea['email_2'],
+        email_2=data['email_2'],
         phone=data['phone'],
         billing_address=data['billing_address'],
         shipping_address=data['shipping_address']
@@ -855,7 +856,7 @@ def get_SalesReceipt():
 
     return jsonify(SalesReceipts_dict)
 
-'''
+''' route without date sorting just in case
 @app.route('/api/sales')
 @login_required
 def get_SalesReceipt():

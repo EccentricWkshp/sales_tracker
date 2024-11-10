@@ -45,7 +45,7 @@ function dateComparator(date1, date2) {
 }
 
 function getDateFilterRange() {
-    var filterModel = gridOptions.api.getFilterModel();
+    var filterModel = gridApi.getFilterModel();
     if (filterModel && filterModel.date) {
         var model = filterModel.date;
         var fromDate = model.dateFrom ? new Date(model.dateFrom).toLocaleDateString('en-CA') : null;

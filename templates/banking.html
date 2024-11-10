@@ -31,11 +31,66 @@
                 </div>
             </div>
         </div>
+
+        <div class="card h-100">
+            <div class="card-body">
+              <h5 class="card-title text-center mb-4">Category Management</h5>
+              
+              <!-- Add New Category -->
+              <div class="mb-4">
+                <h6 class="mb-2">Add New Category</h6>
+                <div class="d-flex gap-2">
+                  <input type="text" class="form-control" id="newCategory" placeholder="New category name">
+                  <button class="btn btn-outline-primary" id="addCategoryBtn" style="white-space: nowrap;">
+                    <i class="fas fa-plus"></i> Add
+                  </button>
+                </div>
+              </div>
+          
+              <!-- Add Pattern Mapping -->
+              <div class="mb-4">
+                <h6 class="mb-2">Add Pattern Mapping</h6>
+                <div class="d-flex flex-column gap-2">
+                  <input type="text" class="form-control" id="newPattern" placeholder="Text pattern">
+                  <select class="form-control" id="categorySelect">
+                    <option value="">Select category</option>
+                  </select>
+                  <button class="btn btn-outline-primary" id="addMappingBtn">
+                    <i class="fas fa-plus"></i>
+                  </button>
+                </div>
+              </div>
+          
+              <!-- Current Mappings -->
+              <div class="mb-4">
+                <h6 class="mb-2">Current Mappings</h6>
+                <div class="table-responsive" style="max-height: 300px;">
+                  <table class="table table-sm table-bordered" id="mappingsTable">
+                    <thead>
+                      <tr>
+                        <th>Pattern</th>
+                        <th>Category</th>
+                        <th width="40"></th>
+                      </tr>
+                    </thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+          
+              <button class="btn btn-primary w-100" id="applyMappingsBtn">
+                <i class="fas fa-sync-alt me-2"></i> Apply Mappings
+              </button>
+            </div>
+          </div>
+
     </div>
+    
 
     <div id="uploadResult" class="alert" style="display: none;"></div>
 
     <div id="transactionsGrid" class="ag-theme-alpine" style="height: 700px; width: 100%;"></div>
+
 </div>
 
 <!-- Receipt Link Modal -->
@@ -89,6 +144,178 @@ function refreshGrid() {
             });
     }
 }
+
+// Category management functionality
+const CategoryManager = {
+    categories: [
+      // Income categories
+      'Interest Earned',
+      'Sales',
+      'Sales of Product Income',
+      'Shipping Income',
+      // COGS categories
+      'Cost of Goods Sold',
+      'Shipping',
+      // Expense categories
+      'Job Supplies',
+      'Office Supplies & Software',
+      'Payment Account Fees',
+      'Ebay Fees',
+      'Etsy Fees',
+      'PayPal Fees',
+      'QuickBooks Fees',
+      'Tindie Fees',
+      'Prototype Supplies & Equipment',
+      'Taxes & Licenses',
+      'Sales Tax Paid',
+      'WA B&O Tax'
+    ],
+    
+    mappings: [
+      { pattern: 'postage', category: 'Shipping' },
+      { pattern: 'usps', category: 'Shipping' },
+      { pattern: 'investment', category: 'Interest Earned' },
+      { pattern: 'interest', category: 'Interest Earned' },
+      { pattern: 'etsy', category: 'Etsy Fees' },
+      { pattern: 'ebay', category: 'Ebay Fees' },
+      { pattern: 'paypal', category: 'PayPal Fees' },
+      { pattern: 'quickbooks', category: 'QuickBooks Fees' },
+      { pattern: 'tindie', category: 'Tindie Fees' }
+    ],
+  
+    init() {
+        this.populateCategories();
+        this.renderMappings();
+        this.bindEvents();
+        
+        // Store mappings in localStorage if they exist
+        const savedMappings = localStorage.getItem('categoryMappings');
+        if (savedMappings) {
+            this.mappings = JSON.parse(savedMappings);
+            this.renderMappings();
+        }
+    },
+    
+    populateCategories() {
+        const select = document.getElementById('categorySelect');
+        select.innerHTML = '<option value="">Select category</option>';
+        this.categories.forEach(category => {
+            const option = document.createElement('option');
+            option.value = category;
+            option.textContent = category;
+            select.appendChild(option);
+        });
+    },
+  
+    renderMappings() {
+        const tbody = document.querySelector('#mappingsTable tbody');
+        tbody.innerHTML = '';
+        
+        this.mappings.forEach((mapping, index) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+            <td>${mapping.pattern}</td>
+            <td>${mapping.category}</td>
+            <td>
+                <button class="btn btn-sm btn-danger delete-mapping" data-index="${index}">
+                <i class="fas fa-trash"></i>
+                </button>
+            </td>
+            `;
+            tbody.appendChild(tr);
+        });
+        },
+  
+    bindEvents() {
+        // Add new category
+        document.getElementById('addCategoryBtn').addEventListener('click', () => {
+            const input = document.getElementById('newCategory');
+            const category = input.value.trim();
+            
+            if (category && !this.categories.includes(category)) {
+            this.categories.push(category);
+            this.populateCategories();
+            input.value = '';
+            }
+        });
+  
+        // Add new mapping
+        document.getElementById('addMappingBtn').addEventListener('click', () => {
+            const pattern = document.getElementById('newPattern').value.trim().toLowerCase();
+            const category = document.getElementById('categorySelect').value;
+            
+            if (pattern && category) {
+            this.mappings.push({ pattern, category });
+            localStorage.setItem('categoryMappings', JSON.stringify(this.mappings));
+            this.renderMappings();
+            document.getElementById('newPattern').value = '';
+            document.getElementById('categorySelect').value = '';
+            }
+        });
+    
+        // Delete mapping
+        document.querySelector('#mappingsTable').addEventListener('click', (e) => {
+            const deleteBtn = e.target.closest('.delete-mapping');
+            if (deleteBtn) {
+            const index = deleteBtn.dataset.index;
+            this.mappings.splice(index, 1);
+            localStorage.setItem('categoryMappings', JSON.stringify(this.mappings));
+            this.renderMappings();
+            }
+        });
+    
+        // Apply mappings
+        document.getElementById('applyMappingsBtn').addEventListener('click', () => {
+            if (!gridApi) {
+                alert('Grid not initialized');
+                return;
+            }
+            
+            let updates = 0;
+            const rowCount = gridApi.getDisplayedRowCount();
+            
+            for (let i = 0; i < rowCount; i++) {
+                const rowNode = gridApi.getDisplayedRowAtIndex(i);
+                if (rowNode && rowNode.data && !rowNode.data.category) {
+                    const description = rowNode.data.description.toLowerCase();
+                    const mapping = this.mappings.find(m => description.includes(m.pattern));
+                    
+                    if (mapping) {
+                        console.log('Mapping categories:', data);
+                        applyTransactionUpdate(rowNode.data.id, 'category', mapping.category);
+                        rowNode.setDataValue('category', mapping.category);
+                        updates++;
+                    }
+                }
+            }
+
+            alert(`Updated ${updates} transaction${updates !== 1 ? 's' : ''}`);
+        });
+    }
+  };
+
+  // Helper function for updating transactions
+function applyTransactionUpdate(id, field, value) {
+    return fetch(`/api/transaction/update/${id}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ [field]: value })
+    })
+    .then(response => response.json())
+    .then(result => {
+      if (!result.success) {
+        console.error('Error updating transaction:', result.error);
+        return false;
+      }
+      return true;
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      return false;
+    });
+  }
 
 document.addEventListener('DOMContentLoaded', function() {
     let selectedTransactionId = null;
@@ -293,6 +520,9 @@ document.addEventListener('DOMContentLoaded', function() {
     } catch (error) {
         console.error('Error initializing grid:', error);
     }
+
+    // Initialize category management
+    CategoryManager.init();
 
     // Handle file upload
     document.getElementById('uploadForm').addEventListener('submit', function(e) {
