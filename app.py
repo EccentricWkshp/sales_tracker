@@ -24,6 +24,7 @@ from sqlalchemy import and_, create_engine, extract, func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload, sessionmaker
 from sqlalchemy.pool import QueuePool
+import sqlite3
 import time
 from urllib.parse import urlparse
 import uuid
@@ -34,9 +35,11 @@ app = Flask(__name__)
 
 UPLOAD_FOLDER = 'static/uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+max_retries = 3
+retry_delay = 0.5
 
 # Use environment variable for secret key, with a fallback for development
-app.config['SECRET_KEY'] = 'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24)
+app.config['SECRET_KEY'] = 'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24) // disabled for testing only
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db?timeout=20'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -920,7 +923,7 @@ def fetch_shipstation_orders():
             app.logger.error(f"Error fetching orders from ShipStation: {str(e)}")
             return jsonify({'error': 'Error fetching orders from ShipStation'}), 500
 
-    processed_orders = process_shipstation_data(all_orders)
+    
     
     orders_created = 0
     orders_updated = 0
@@ -928,77 +931,81 @@ def fetch_shipstation_orders():
     customers_updated = 0
     errors = []
 
-    for order in processed_orders:
-        try:
-            with session_scope() as session:
-                customer = get_or_create_customer(order['customer'], session)
-                shipment = fetch_shipstation_shipment(order['order_id'], internal_call=True)
-                
-                # Split serviceCode into parts so we can get the carrier only
-                serviceCodeParts = shipment['shipments'][0]['serviceCode'].split('_')
-                # Capitalize the first part
-                serviceCodeParts[0] = serviceCodeParts[0].upper()
-                
-                #existing_sale = SalesReceipt.query.filter_by(shipstation_order_id=order['sales_receipt_number']).first()
-                existing_sale = session.query(SalesReceipt).filter_by(shipstation_order_id=order['sales_receipt_number']).first()
+    Session = db.session.session_factory
+    session = Session()
 
-                if existing_sale:
-                    # Update existing sale
-                    existing_sale.shipservice = serviceCodeParts[0]
-                    existing_sale.tracking = shipment['shipments'][0]['trackingNumber']
-                    existing_sale.shipdate = datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date()
-                    #existing_sale.customer_id = customer.id
-                    #existing_sale.date = order['sales_receipt_date']
-                    #existing_sale.total = order['order_total']
-                    #existing_sale.tax = order['tax_amount']
-                    #existing_sale.shipping = order['shipping_amount']
-                    orders_updated += 1
-                else:
-                    # Create a new sale
-                    new_sale = SalesReceipt(
-                        customer_id=customer.id,
-                        shipservice=serviceCodeParts[0],
-                        tracking=shipment['shipments'][0]['trackingNumber'],
-                        shipdate=datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date(),
-                        date=order['sales_receipt_date'],
-                        total=order['order_total'],
-                        tax=order['tax_amount'],
-                        shipping=order['shipping_amount'],
+    try:
+        processed_orders = process_shipstation_data(all_orders)
+        
+        for order in processed_orders:
+            try:
+                with session.begin_nested():
+                    customer = get_or_create_customer(order['customer'])
+                    shipment = fetch_shipstation_shipment(order['order_id'], internal_call=True)
+                    
+                    serviceCodeParts = shipment['shipments'][0]['serviceCode'].split('_')
+                    serviceCodeParts[0] = serviceCodeParts[0].upper()
+                    
+                    existing_sale = session.query(SalesReceipt).filter_by(
                         shipstation_order_id=order['sales_receipt_number']
-                    )
-                    #db.session.add(new_sale)
-                    session.add(new_sale)
-                    orders_created += 1
+                    ).first()
+
+                    if existing_sale:
+                        existing_sale.shipservice = serviceCodeParts[0]
+                        existing_sale.tracking = shipment['shipments'][0]['trackingNumber']
+                        existing_sale.shipdate = datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date()
+                        #existing_sale.customer_id = customer.id
+                        #existing_sale.date = order['sales_receipt_date']
+                        #existing_sale.total = order['order_total']
+                        #existing_sale.tax = order['tax_amount']
+                        #existing_sale.shipping = order['shipping_amount']
+                        orders_updated += 1
+                    else:
+                        # Create a new sale
+                        new_sale = SalesReceipt(
+                            customer_id=customer.id,
+                            shipservice=serviceCodeParts[0],
+                            tracking=shipment['shipments'][0]['trackingNumber'],
+                            shipdate=datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date(),
+                            date=order['sales_receipt_date'],
+                            total=order['order_total'],
+                            tax=order['tax_amount'],
+                            shipping=order['shipping_amount'],
+                            shipstation_order_id=order['sales_receipt_number']
+                        )
+                        session.add(new_sale)
+                        session.flush()
+                        orders_created += 1
                 
                 # Process line items
                 sale = existing_sale or new_sale
                 process_line_items(sale, order['items'], session)
 
-        except Exception as e:
-            db.session.rollback()
-            error_msg = f"Error processing order {order['order_id']}: {str(e)}"
-            app.logger.error(error_msg)
-            errors.append(error_msg)
-            continue
+            except Exception as e:
+                session.rollback()
+                error_msg = f"Error processing order {order['order_id']}: {str(e)}"
+                app.logger.error(error_msg)
+                errors.append(error_msg)
+                continue
 
-    try:
-        db.session.commit()
-        message = (f'Successfully processed {len(processed_orders)} orders from ShipStation. '
-                   f'Created {orders_created} new orders and created {customers_created} new customers.'
-                   f'Updated {orders_updated} existing orders.')
-        if errors:
-            message += f' Encountered {len(errors)} errors.'
+        session.commit()
         
-        app.logger.info(message)
-        return jsonify({
-            'message': message,
-            'errors': errors
-        }), 200 if not errors else 207  # Use 207 Multi-Status if there were some errors
-    except IntegrityError as e:
-        db.session.rollback()
-        error_msg = f'Error committing changes to database: {str(e)}'
-        app.logger.error(error_msg)
-        return jsonify({'error': error_msg}), 500
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+    message = (f'Successfully processed orders. '
+               f'Created {orders_created} new orders. '
+               f'Updated {orders_updated} existing orders.')
+    if errors:
+        message += f' Encountered {len(errors)} errors.'
+    
+    return jsonify({
+        'message': message,
+        'errors': errors
+    }), 200 if not errors else 207
 
 @app.route('/shipstation/fetch_shipment/<int:id>')
 @login_required
@@ -1285,38 +1292,48 @@ def format_name(name):
     return ' '.join(formatted_parts)
 
 def get_or_create_customer(customer_data):
-    email = customer_data.get('email')
     
-    if not email:
-        # Generate a unique placeholder email
-        placeholder_email = f"placeholder_{uuid.uuid4().hex}@example.com"
-        app.logger.warning(f"Missing customer email. Generated placeholder: {placeholder_email}")
-        email = placeholder_email
+    for attempt in range(max_retries):
+        try:
+            with db.session.no_autoflush:
+                email = customer_data.get('email')
+                
+                if not email:
+                    placeholder_email = f"placeholder_{uuid.uuid4().hex}@example.com"
+                    app.logger.warning(f"Missing customer email. Generated placeholder: {placeholder_email}")
+                    email = placeholder_email
 
-    customer = Customer.query.filter_by(email=email).first()
+                customer = Customer.query.filter_by(email=email).first()
     
-    # Format the name
-    formatted_name = format_name(customer_data.get('name', 'Unknown'))
-    
-    if not customer:
-        customer = Customer(
-            name=formatted_name,
-            company=customer_data.get('company', ''),
-            email=email,
-            phone=customer_data.get('phone', ''),
-            billing_address=format_address(customer_data),
-            shipping_address=format_address(customer_data)
-        )
-        db.session.add(customer)
-    #else:
-    #    # Update existing customer information
-    #    customer.name = formatted_name
-    #    customer.company = customer_data.get('company', customer.company)
-    #    customer.phone = customer_data.get('phone', customer.phone)
-    #    customer.billing_address = format_address(customer_data)
-    #    customer.shipping_address = format_address(customer_data)
+                if not customer:
+                    formatted_name = format_name(customer_data.get('name', 'Unknown'))
+                    customer = Customer(
+                        name=formatted_name,
+                        company=customer_data.get('company', ''),
+                        email=email,
+                        phone=customer_data.get('phone', ''),
+                        billing_address=format_address(customer_data),
+                        shipping_address=format_address(customer_data)
+                    )
+                    db.session.add(customer)
+                    db.session.flush()
+                #else:
+                #    # Update existing customer information
+                #    customer.name = formatted_name
+                #    customer.company = customer_data.get('company', customer.company)
+                #    customer.phone = customer_data.get('phone', customer.phone)
+                #    customer.billing_address = format_address(customer_data)
+                #    customer.shipping_address = format_address(customer_data)
 
-    return customer
+                return customer
+
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e) and attempt < max_retries - 1:
+                time.sleep(retry_delay * (2 ** attempt))
+            else:
+                raise
+        
+    raise Exception("Failed to create/get customer after retries")
 
 def format_address(address_dict):
     country_code = address_dict.get('country', '')
@@ -1421,42 +1438,64 @@ def process_shipstation_data(shipstation_orders):
 
     for order in shipstation_orders:
         try:
-            customer_data = {
-                'name': order['shipTo'].get('name', 'Unknown'),
-                'email': order.get('customerEmail'),  # This might be None
-                'company': order['shipTo'].get('company', ''),
-                'street1': order['shipTo'].get('street1', ''),
-                'street2': order['shipTo'].get('street2', ''),
-                'street3': order['shipTo'].get('street3', ''),
-                'city': order['shipTo'].get('city', ''),
-                'state': order['shipTo'].get('state', ''),
-                'postal_code': order['shipTo'].get('postalCode', ''),
-                'country': order['shipTo'].get('country', ''),
-                'phone': order['shipTo'].get('phone', ''),
-            }
+            # Use a dedicated session for each order
+            with db.session.begin_nested() as nested:
+                try:
+                    customer_data = {
+                        'name': order['shipTo'].get('name', 'Unknown'),
+                        'email': order.get('customerEmail'),
+                        'company': order['shipTo'].get('company', ''),
+                        'street1': order['shipTo'].get('street1', ''),
+                        'street2': order['shipTo'].get('street2', ''),
+                        'street3': order['shipTo'].get('street3', ''),
+                        'city': order['shipTo'].get('city', ''),
+                        'state': order['shipTo'].get('state', ''),
+                        'postal_code': order['shipTo'].get('postalCode', ''),
+                        'country': order['shipTo'].get('country', ''),
+                        'phone': order['shipTo'].get('phone', ''),
+                    }
 
-            processed_order = {
-                'order_id': order['orderId'],
-                'sales_receipt_number': order['orderNumber'],
-                'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
-                'customer': customer_data,
-                'items': [
-                    {
-                        'sku': item.get('sku', 'Unknown SKU'),
-                        'name': item.get('name', 'Unknown Item'),
-                        'quantity': item.get('quantity', 0),
-                        'unit_price': Decimal(str(item.get('unitPrice', '0'))),
-                        'options': item.get('options', []),
-                    } for item in order.get('items', [])
-                ],
-                'order_total': Decimal(str(order.get('orderTotal', '0'))),
-                'amount_paid': Decimal(str(order.get('amountPaid', '0'))),
-                'tax_amount': Decimal(str(order.get('taxAmount', '0'))),
-                'shipping_amount': Decimal(str(order.get('shippingAmount', '0'))),
-            }
-            processed_orders.append(processed_order)
+                    # Use get_or_create_customer with retry logic                  
+                    for attempt in range(max_retries):
+                        try:
+                            customer = get_or_create_customer(customer_data)
+                            break
+                        except sqlite3.OperationalError as e:
+                            if "database is locked" in str(e) and attempt < max_retries - 1:
+                                time.sleep(retry_delay * (2 ** attempt))
+                            else:
+                                raise
+
+                    if not customer:
+                        raise Exception("Failed to create/get customer after retries")
+
+                    processed_order = {
+                        'order_id': order['orderId'],
+                        'sales_receipt_number': order['orderNumber'],
+                        'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
+                        'customer': customer_data,  # Use the original customer_data dictionary
+                        'items': [
+                            {
+                                'sku': item.get('sku', 'Unknown SKU'),
+                                'name': item.get('name', 'Unknown Item'),
+                                'quantity': item.get('quantity', 0),
+                                'unit_price': Decimal(str(item.get('unitPrice', '0'))),
+                                'options': item.get('options', []),
+                            } for item in order.get('items', [])
+                        ],
+                        'order_total': Decimal(str(order.get('orderTotal', '0'))),
+                        'amount_paid': Decimal(str(order.get('amountPaid', '0'))),
+                        'tax_amount': Decimal(str(order.get('taxAmount', '0'))),
+                        'shipping_amount': Decimal(str(order.get('shippingAmount', '0'))),
+                    }
+                    processed_orders.append(processed_order)
+
+                except Exception as e:
+                    nested.rollback()
+                    raise e
+
         except Exception as e:
-            app.logger.error(f"Error processing ShipStation order {order.get('orderId', 'Unknown')}: {str(e)}")
+            app.logger.error(f"Error processing order {order.get('orderId', 'Unknown')}: {str(e)}")
             continue
 
     return processed_orders
@@ -1479,35 +1518,97 @@ def parse_shipstation_date(date_str):
     # Convert to datetime object and return it
     return datetime.strptime(cleaned_date_str, '%Y-%m-%dT%H:%M:%S.%f').strftime('%Y-%m-%dT%H:%M:%S.%f')
 
-def process_line_items(sale, shipstation_items):
-    # Remove existing line items if updating an existing sale
-    if sale.line_items:
-        for item in sale.line_items:
-            db.session.delete(item)
-        sale.line_items = []
+def process_line_items(sale, shipstation_items, session):
+    try:
+        # Use a nested transaction for deleting line items
+        with session.begin_nested():
+            # Delete existing line items if updating an existing sale
+            if sale.line_items:
+                for item in sale.line_items:
+                    session.delete(item)
+                session.flush()  # Flush the deletes first
+            
+            # Create new line items
+            for item in shipstation_items:
+                product = get_or_create_product(item, session)
+                line_item = LineItem(
+                    receipt_id=sale.id,
+                    product_id=product.id,
+                    quantity=int(item['quantity']),
+                    price_each=float(item['unit_price']),
+                    total_price=float(item['quantity']) * float(item['unit_price'])
+                )
+                session.add(line_item)
+                
+            session.flush()  # Flush the new items
+    except sqlite3.OperationalError as e:
+        if "database is locked" in str(e):
+            # Implement retry logic
+            for attempt in range(3):
+                try:
+                    time.sleep(0.5 * (2 ** attempt))
+                    # Retry the entire operation
+                    with session.begin_nested():
+                        if sale.line_items:
+                            for item in sale.line_items:
+                                session.delete(item)
+                            session.flush()
+                        
+                        for item in shipstation_items:
+                            product = get_or_create_product(item, session)
+                            line_item = LineItem(
+                                receipt_id=sale.id,
+                                product_id=product.id,
+                                quantity=int(item['quantity']),
+                                price_each=float(item['unit_price']),
+                                total_price=float(item['quantity']) * float(item['unit_price'])
+                            )
+                            session.add(line_item)
+                            
+                        session.flush()
+                    break
+                except sqlite3.OperationalError:
+                    if attempt == 2:  # Last attempt
+                        raise
+                    continue
+        else:
+            raise
 
-    for item in shipstation_items:
-        product = get_or_create_product(item)
-        line_item = LineItem(
-            receipt_id=sale.id,
-            product_id=product.id,
-            quantity=int(item['quantity']),
-            price_each=float(item['unit_price']),
-            total_price=float(item['quantity']) * float(item['unit_price'])
-        )
-        sale.line_items.append(line_item)
-
-def get_or_create_product(shipstation_item):
-    product = Product.query.filter_by(sku=shipstation_item['sku']).first()
-    if not product:
-        product = Product(
-            sku=shipstation_item['sku'],
-            description=shipstation_item['name'],
-            price=float(shipstation_item['unit_price'])
-        )
-        db.session.add(product)
-        db.session.flush()  # This assigns an ID to the new product
-    return product
+def get_or_create_product(shipstation_item, session):
+    """Get or create a product with the given session"""
+    try:
+        with session.begin_nested():
+            product = session.query(Product).filter_by(sku=shipstation_item['sku']).first()
+            if not product:
+                product = Product(
+                    sku=shipstation_item['sku'],
+                    description=shipstation_item['name'],
+                    price=float(shipstation_item['unit_price'])
+                )
+                session.add(product)
+                session.flush()
+            return product
+    except sqlite3.OperationalError as e:
+        if "database is locked" in str(e):
+            for attempt in range(3):
+                try:
+                    time.sleep(0.5 * (2 ** attempt))
+                    with session.begin_nested():
+                        product = session.query(Product).filter_by(sku=shipstation_item['sku']).first()
+                        if not product:
+                            product = Product(
+                                sku=shipstation_item['sku'],
+                                description=shipstation_item['name'],
+                                price=float(shipstation_item['unit_price'])
+                            )
+                            session.add(product)
+                            session.flush()
+                        return product
+                except sqlite3.OperationalError:
+                    if attempt == 2:  # Last attempt
+                        raise
+                    continue
+        raise
 
 def merge_customers(customer_id1, customer_id2):
     """

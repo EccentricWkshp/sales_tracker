@@ -179,6 +179,9 @@
     document.addEventListener('DOMContentLoaded', function() {
         // Get today's date
         const today = new Date();
+
+        // Add one day to today's date
+        today.setDate(today.getDate() + 1);
         
         // Format today's date as YYYY-MM-DD
         const todayString = today.toISOString().split('T')[0];
