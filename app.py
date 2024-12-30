@@ -963,7 +963,7 @@ def fetch_shipstation_orders():
                     serviceCodeParts[0] = serviceCodeParts[0].upper()
                     
                     existing_sale = session.query(SalesReceipt).filter_by(
-                        shipstation_order_id=order['shipstation_order_id']
+                        order_number=order['order_number']
                         #shipstation_order_id=order['sales_receipt_number'] # TODO: We'll need to update this to match based on the correct item
                     ).first()
 
@@ -1007,7 +1007,7 @@ def fetch_shipstation_orders():
 
             except Exception as e:
                 session.rollback()
-                error_msg = f"Error processing order {order['order_id']}: {str(e)}"
+                error_msg = f"1010: Error processing order {order['order_id']}: {str(e)}"
                 app.logger.error(error_msg)
                 errors.append(error_msg)
                 continue
@@ -1114,7 +1114,7 @@ def update_shipment(id):
 
     except Exception as e:
         db.session.rollback()
-        error_msg = f"Error processing order {id}: {str(e)}"
+        error_msg = f"1117: Error processing order {id}: {str(e)}"
         app.logger.error(error_msg)
         errors.append(error_msg)
 
@@ -1192,7 +1192,7 @@ def update_notes(id):
 
     except Exception as e:
         db.session.rollback()
-        error_msg = f"Error processing order {id}: {str(e)}"
+        error_msg = f"1195: Error processing order {id}: {str(e)}"
         app.logger.error(error_msg)
         errors.append(error_msg)
 
@@ -1578,7 +1578,7 @@ def process_shipstation_data(shipstation_orders):
 
                     processed_order = {
                         'order_id': order['orderId'],
-                        'shipstation_order_id': order['shipstation_order_id'],
+                        'shipstation_order_id': order['orderId'],
                         'order_number': order['orderNumber'],
                         'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
                         'customer': customer_data,  # Use the original customer_data dictionary
@@ -1605,7 +1605,7 @@ def process_shipstation_data(shipstation_orders):
                     raise e
 
         except Exception as e:
-            app.logger.error(f"Error processing order {order.get('orderId', 'Unknown')}: {str(e)}")
+            app.logger.error(f"1608: Error processing order {order.get('orderId', 'Unknown')}: {str(e)}")
             continue
 
     return processed_orders
