@@ -9,7 +9,8 @@
         <h1 class="invoice-title">Sales Receipt #{{ sale.id }}</h1>
         <div class="invoice-details">
             <p><strong>Date:</strong> {{ sale.date.strftime('%m-%d-%Y') }}</p>
-            <p><strong>Order #:</strong> {{ sale.shipstation_order_id }}</p>
+            <p><strong>SS Order #:</strong> {{ sale.shipstation_order_id }}</p>
+            <p><strong>Order #:</strong> {{ sale.order_number }}</p>
         </div>
     </div>
     

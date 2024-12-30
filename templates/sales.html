@@ -194,7 +194,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
             },
-            { headerName: 'Order #', field: 'shipstation_order_id', sortable: true, filter: true },
+            { headerName: 'Order #', field: 'order_number', sortable: true, filter: true },
             { headerName: 'Receipt #', field: 'id', sortable: true, filter: true },
             { headerName: 'Customer', field: 'customer_name', sortable: true, filter: true },
             { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
@@ -207,6 +207,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 id: {{ sale.id }},
                 date: '{{ sale.date.strftime('%m-%d-%Y') }}',
                 shipdate: '{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}',
+                order_number: '{{ sale.order_number }}',
                 shipstation_order_id: '{{ sale.shipstation_order_id }}',
                 customer_name: '{{ sale.customer.name if sale.customer else 'N/A' }}',
                 total: '{{ "%.2f"|format(sale.total) }}',

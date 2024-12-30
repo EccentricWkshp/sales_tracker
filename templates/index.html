@@ -111,6 +111,8 @@
                         }
                     }
                 },
+                { headerName: 'Order #', field: 'order_number', sortable: true, filter: true, flex: 1 },
+                { headerName: 'SS #', field: 'shipstation_order_id', sortable: true, filter: true, flex: 1 },
                 { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
                 { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator, flex: 1 },
             ],
@@ -120,6 +122,8 @@
                     id: {{ sale.id }},
                     date: '{{ sale.date.strftime('%m-%d-%Y') }}',
                     shipdate: '{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}',
+                    order_number: '{{ sale.order_number }}',
+                    shipstation_order_id: '{{ sale.shipstation_order_id }}',
                     customer: '{{ sale.customer.name|cleaned }}',
                     total: '{{ "%.2f"|format(sale.total) }}'
                 },
