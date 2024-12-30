@@ -189,6 +189,8 @@ class SalesReceipt(db.Model):
     tax = db.Column(db.Float, nullable=False)
     shipping = db.Column(db.Float, nullable=False)
     line_items = db.relationship('LineItem', backref='sales_receipt', lazy=True)
+    customer_notes = db.Column(db.String(500)) # Notes visible to customer
+    internal_notes = db.Column(db.String(500)) # Internal notes
 
     def to_dict(self):
         return {
@@ -203,7 +205,9 @@ class SalesReceipt(db.Model):
             'total': self.total,
             'tax': self.tax,
             'shipping': self.shipping,
-            'line_items': [item.to_dict() for item in self.line_items]
+            'line_items': [item.to_dict() for item in self.line_items],
+            'customer_notes': self.customer_notes,
+            'internal_notes': self.internal_notes
         }
 
 class LineItem(db.Model):
@@ -706,7 +710,9 @@ def add_sale():
         date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
         total=float(data['total']),
         tax=float(data['tax']),
-        shipping=float(data['shipping'])
+        shipping=float(data['shipping']),
+        customer_notes=data.get('customer_notes', ''),
+        internal_notes=data.get('internal_notes', '')
     )
     db.session.add(new_sale)
     db.session.flush()  # This assigns an ID to new_sale
@@ -750,7 +756,9 @@ def get_sale(id):
             'quantity': item.quantity,
             'price_each': float(item.price_each),
             'total_price': float(item.total_price)
-        } for item in sale.line_items]
+        } for item in sale.line_items],
+        'customer_notes': sale.customer_notes,
+        'internal_notes': sale.internal_notes,
     })
 
 @app.route('/sales/edit/<int:id>', methods=['GET', 'POST'])
@@ -774,6 +782,8 @@ def edit_sale(id):
             sale.date = datetime.strptime(request.form['date'], '%Y-%m-%dT%H:%M')
             sale.shipping = Decimal(request.form['shipping'])
             sale.tax = Decimal(request.form['tax'])
+            sale.customer_notes = request.form['customer_notes']
+            sale.internal_notes = request.form['internal_notes']
 
             # Handle line items
             # First, remove all existing line items

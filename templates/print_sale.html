@@ -66,6 +66,9 @@
                 print-color-adjust: exact;
                 -webkit-print-color-adjust: exact;
             }
+            .internal-notes {
+                display: none;
+            }
         }
     </style>
 </head>
@@ -164,6 +167,13 @@
             </tr>
         </table>
     </div>
+
+    {% if sale.customer_notes and sale.customer_notes != 'None' %}
+        <div class="customer-notes">
+            <h3>Notes</h3>
+            <p>{{ sale.customer_notes | nl2br }}</p>
+        </div>
+    {% endif %}
 	
 	<script>
         window.onload = function() {

@@ -94,6 +94,20 @@
     </div>
 
     <div class="sale-summary">
+        <div class="notes-section">
+            {% if sale.customer_notes and sale.customer_notes != 'None' %}
+            <div class="customer-notes">
+                <h3>Customer Notes</h3>
+                <p>{{ sale.customer_notes | nl2br }}</p>
+            </div>
+            {% endif %}
+            {% if sale.internal_notes and sale.internal_notes != 'None' %}
+            <div class="internal-notes">
+                <h3>Internal Notes</h3>
+                <p>{{ sale.internal_notes | nl2br }}</p>
+            </div>
+            {% endif %}
+        </div>
         <table class="summary-table">
             <tr>
                 <td>Subtotal:</td>
@@ -112,7 +126,7 @@
                 <td>${{ "%.2f"|format(sale.total) }}</td>
             </tr>
         </table>
-    </div>
+    </div>    
 
     <div class="actions">
         <a href="{{ url_for('edit_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit Sale</a>

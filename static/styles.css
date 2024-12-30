@@ -232,6 +232,15 @@ tr:hover {
     box-sizing: border-box;
 }
 
+.notes-section textarea {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    resize: vertical;
+    box-sizing: border-box;
+}
+
 /* Modal Styles */
 .modal {
     display: none;
@@ -377,18 +386,34 @@ tr:hover {
     padding: 5px;
 }
 
+.notes-section {
+    flex: 1;
+    margin-right: 20px;
+    padding: 15px;
+    border-radius: 5px;
+}
+
+.customer-notes, .internal-notes {
+    margin-bottom: 15px;
+}
+
 .sale-summary {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
+    align-items: flex-start;
     margin-top: 20px;
 }
 
 .summary-table {
     width: 300px;
+    flex-shrink: 0;
 }
 
 .summary-table td {
-    padding: 5px;
+    padding: 3px 5px;
+    border: 1px solid #ddd;
+    line-height: 1.2;
+    height: 24px;
 }
 
 .summary-table td:first-child {

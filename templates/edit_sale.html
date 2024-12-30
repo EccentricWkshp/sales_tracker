@@ -120,6 +120,17 @@
             </table>
         </div>
         
+        <div class="notes-section">
+            <div class="form-group">
+                <label for="customer_notes">Customer Notes</label>
+                <textarea id="customer_notes" name="customer_notes" class="form-control" rows="3">{{ sale.customer_notes if sale.customer_notes and sale.customer_notes != 'None' else '' }}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="internal_notes">Internal Notes</label>
+                <textarea id="internal_notes" name="internal_notes" class="form-control" rows="3">{{ sale.internal_notes if sale.internal_notes and sale.internal_notes != 'None' else '' }}</textarea>
+            </div>
+        </div>
+
         <div class="actions">
             <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Update Sale</button>
             <a href="{{ url_for('view_sale', id=sale.id) }}" class="btn btn-secondary"><i class="fas fa-times"></i> Cancel</a>
