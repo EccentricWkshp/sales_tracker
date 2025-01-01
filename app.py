@@ -12,6 +12,7 @@ from flask_sqlalchemy import SQLAlchemy
 import io
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 from markupsafe import Markup
 import os
 import pycountry
@@ -32,6 +33,17 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
+
+# Logging Setup
+if not os.path.exists('logs'):
+    os.makedirs('logs')
+
+handler = RotatingFileHandler('logs/sales_tracker.log', maxBytes=10000000, backupCount=5)
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+app.logger.addHandler(handler)
+app.logger.setLevel(logging.INFO)
 
 UPLOAD_FOLDER = 'static/uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
@@ -438,13 +450,24 @@ def get_state_taxes_data():
 
     # Define date ranges for quarters
     date_ranges = {
+        'Q1': (f'{year}-01-01 00:00:00', f'{year}-03-31 23:59:59'),
+        'Q2': (f'{year}-04-01 00:00:00', f'{year}-06-30 23:59:59'),
+        'Q3': (f'{year}-07-01 00:00:00', f'{year}-09-30 23:59:59'),
+        'Q4': (f'{year}-10-01 00:00:00', f'{year}-12-31 23:59:59'),
+    }
+
+    ''' Save for later to undo if needed
+    date_ranges = {
         'Q1': (f'{year}-01-01', f'{year}-03-31'),
         'Q2': (f'{year}-04-01', f'{year}-06-30'),
         'Q3': (f'{year}-07-01', f'{year}-09-30'),
         'Q4': (f'{year}-10-01', f'{year}-12-31'),
     }
+    '''
 
     start_date, end_date = date_ranges.get(quarter, ('', ''))
+
+    # app.logger.info(f"Filtering sales for date range: {start_date} to {end_date}")
 
     query = SalesReceipt.query.filter(
         SalesReceipt.date.between(start_date, end_date)
@@ -452,6 +475,14 @@ def get_state_taxes_data():
         joinedload(SalesReceipt.customer),
         joinedload(SalesReceipt.line_items).joinedload(LineItem.product)
     )
+
+    # Log the actual SQL query being generated
+    # app.logger.info(f"Generated SQL: {query.statement.compile(compile_kwargs={'literal_binds': True})}")
+
+     # Log the results count and dates
+    # results = query.all()
+    # app.logger.info(f"Found {len(results)} results")
+    # app.logger.info(f"Date range of results: {min(r.date for r in results)} to {max(r.date for r in results)}")
 
     total_count = query.count()
     sales = query.offset(start).limit(end - start).all()
@@ -464,6 +495,8 @@ def get_state_taxes_data():
 
         data.append({
             'date': sale.date.strftime('%Y-%m-%d'),
+            'id': sale.id,
+            'customer_id': sale.customer_id,
             'name': sale.customer.name,
             'state': get_state_info(sale.customer.shipping_address),
             'manufacturing': float(manufacturing),
@@ -1494,10 +1527,36 @@ def get_state_info(address):
 
     # Check if the last line is a country
     potential_country = address_parts[-1].strip()
+    
+    # Special case for Czech Republic because pycountry expects Czechia
+    if potential_country == 'Czech Republic':
+        return 'Czech Republic'
+
     country = pycountry.countries.get(name=potential_country)
     if country:
         #print(f"Non-US address detected, country: {country.name}")  # Debug print
         return country.name
+
+    # For US addresses, we need to handle both combined and split state/zip formats
+    for i in range(len(address_parts) - 1):
+        line = address_parts[i].strip()
+        us_state_pattern = r',\s*(\w{2})\s*$'  # Matches ", XX" at end of line
+        state_match = re.search(us_state_pattern, line)
+        
+        if state_match:
+            state = state_match.group(1)
+            # Check if next line contains a ZIP code
+            next_line = address_parts[i + 1].strip()
+            zip_pattern = r'^\d{5}(-\d{4})?$'
+            if re.match(zip_pattern, next_line):
+                if state == 'WA':
+                    # For Washington, return City, State, ZIP
+                    city_match = re.match(r'^(.+),', state_country_line)
+                    city = city_match.group(1) if city_match else 'Unknown City'
+                    zip_match = re.search(r'(\d{5}(-\d{4})?)$', state_country_line)
+                    zip_code = zip_match.group(1) if zip_match else 'Unknown ZIP'
+                    return f"{city}, WA {zip_code}"
+                return state
 
     # For US addresses, the state info should be in the last line
     state_country_line = address_parts[-1].strip()
@@ -1515,7 +1574,7 @@ def get_state_info(address):
             city = city_match.group(1) if city_match else 'Unknown City'
             zip_match = re.search(r'(\d{5}(-\d{4})?)$', state_country_line)
             zip_code = zip_match.group(1) if zip_match else 'Unknown ZIP'
-            result = f"{city}, WA, {zip_code}"
+            result = f"{city}, WA {zip_code}"
         else:
             result = state
     else:
@@ -1525,6 +1584,16 @@ def get_state_info(address):
             if country:
                 result = country.name
                 break
+
+            # Try to find country name within the line
+            # This helps with lines like "Prague, Czech Republic"
+            words = line.split()
+            for i in range(len(words)):
+                for j in range(i + 1, len(words) + 1):
+                    potential_country = ' '.join(words[i:j])
+                    country = pycountry.countries.get(name=potential_country)
+                    if country:
+                        return country.name
         else:
             result = 'Unknown'
 

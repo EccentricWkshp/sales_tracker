@@ -88,169 +88,251 @@
     <label for="yearSelect">Year:</label>
     <select id="yearSelect"></select>
 
-    <button id="applyFilter">Apply Filter</button>
+    <button id="applyFilter" class="btn btn-primary">Apply Filter</button>
+    <button id="exportSaleBtn" class="btn btn-primary"><i class="fas fa-file-csv"></i> Export Sales</button>
 </div>
+
 
 <div id="stateTaxesGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Populate year dropdown
-    var currentYear = new Date().getFullYear();
-    var yearSelect = document.getElementById('yearSelect');
-    for (var i = currentYear; i >= currentYear - 5; i--) {
-        var option = document.createElement('option');
-        option.value = i;
-        option.textContent = i;
-        yearSelect.appendChild(option);
-    }
+    document.addEventListener('DOMContentLoaded', function() {
+        // Populate year dropdown
+        var currentYear = new Date().getFullYear();
+        var yearSelect = document.getElementById('yearSelect');
+        for (let i = currentYear; i >= currentYear - 5; i--) {
+            var option = document.createElement('option');
+            option.value = i;
+            option.textContent = i;
+            yearSelect.appendChild(option);
+        }
+    
+        // Set default quarter based on current date
+        function setDefaultSelections() {
+            var currentDate = new Date();
+            var currentMonth = currentDate.getMonth();
+            var currentQuarter = Math.floor(currentMonth / 3);
+            var previousQuarter = (currentQuarter - 1 + 4) % 4; // Ensure it's always 0-3
+            var previousYear = currentYear - 1;
+            var filterYear;
 
-    // Set default selections
-    function setDefaultSelections() {
-        var currentDate = new Date();
-        var currentMonth = currentDate.getMonth();
-        var currentQuarter = Math.floor(currentMonth / 3);
-        var previousQuarter = (currentQuarter - 1 + 4) % 4; // Ensure it's always 0-3
-        
-        yearSelect.value = currentYear;
-        document.getElementById('quarterSelect').selectedIndex = previousQuarter;
-    }
-
-    setDefaultSelections();
-
-    var gridOptions = {
-        domLayout: "autoHeight",
-        columnDefs: [
-            { 
-                headerName: 'Date', 
-                field: 'date',
-                width: 125,
-                sortable: true, 
-                filter: 'agDateColumnFilter',
-                filterParams: {
-                    comparator: function(filterLocalDateAtMidnight, cellValue) {
-                        if (!cellValue) return -1;
-                        var dateParts = cellValue.split('-');
-                        var cellDate = new Date(Number(dateParts[0]), Number(dateParts[1]) - 1, Number(dateParts[2]));
-
-                        if (cellDate < filterLocalDateAtMidnight) {
-                            return -1;
-                        } else if (cellDate > filterLocalDateAtMidnight) {
-                            return 1;
-                        } else {
+            // Set the year to the previous year if we are in Q1
+            if (currentQuarter = 1) {
+                filterYear = previousYear;
+            } else {
+                filterYear = currentYear;
+            }
+            
+            yearSelect.value = filterYear;
+            document.getElementById('quarterSelect').selectedIndex = previousQuarter;
+        }
+    
+        setDefaultSelections();
+    
+        var gridOptions = {
+            domLayout: 'autoHeight',
+            columnDefs: [
+                { 
+                    headerName: 'Date', 
+                    field: 'date',
+                    width: 125,
+                    sortable: true, 
+                    filter: 'agDateColumnFilter',
+                    filterParams: {
+                        comparator: function(filterLocalDateAtMidnight, cellValue) {
+                            if (!cellValue) return -1;
+                            var dateParts = cellValue.split('-');
+                            var cellDate = new Date(Number(dateParts[0]), Number(dateParts[1]) - 1, Number(dateParts[2]));
+    
+                            if (cellDate < filterLocalDateAtMidnight) {
+                                return -1;
+                            } else if (cellDate > filterLocalDateAtMidnight) {
+                                return 1;
+                            }
                             return 0;
                         }
+                    },
+                    valueFormatter: function(params) {
+                        if (!params.value) return '';
+                        var dateParts = params.value.split('-');
+                        return `${dateParts[1]}-${dateParts[2]}-${dateParts[0]}`;
+                    },
+                    onCellClicked: function(params){
+                        window.open("/sales/view/" + params.data.id, '_blank');
+                    } 
+                },
+                { headerName: 'Name', field: 'name', sortable: true, filter: true,
+                    onCellClicked: function(params){
+                        window.open("/customers/view/" + params.data.customer_id, '_blank');
+                    } 
+                },
+                { headerName: 'State/Country', field: 'state', sortable: true, filter: true,
+                    onCellClicked: function(params) {
+                        // Create a temporary textarea element
+                        let textarea = document.createElement('textarea');
+                        textarea.value = params.value;
+                        document.body.appendChild(textarea);
+                        textarea.select();
+                        
+                        try {
+                            // Execute the copy command
+                            document.execCommand('copy');
+                            
+                            // Show a temporary tooltip
+                            let cell = params.event.target;
+                            let originalTitle = cell.title;
+                            cell.title = 'Copied!';
+                            cell.style.cursor = 'copy';
+                            
+                            // Reset the tooltip after delay
+                            setTimeout(() => {
+                                cell.title = originalTitle;
+                            }, 1500);
+                        } catch (err) {
+                            console.error('Failed to copy text:', err);
+                        } finally {
+                            // Clean up
+                            document.body.removeChild(textarea);
+                        }
+                    },
+                    cellStyle: {
+                        cursor: 'copy'
                     }
                 },
-                valueFormatter: function(params) {
-                    if (!params.value) return '';
-                    var dateParts = params.value.split('-');
-                    return `${dateParts[1]}-${dateParts[2]}-${dateParts[0]}`;
+                { 
+                    headerName: 'Manufacturing', 
+                    field: 'manufacturing', 
+                    width: 170, 
+                    sortable: true, 
+                    filter: 'agNumberColumnFilter',
+                    valueFormatter: params => `$${params.value.toFixed(2)}`
+                },
+                { 
+                    headerName: 'Retail', 
+                    field: 'retail', 
+                    width: 100, 
+                    sortable: true, 
+                    filter: 'agNumberColumnFilter',
+                    valueFormatter: params => `$${params.value.toFixed(2)}`
+                },
+                { 
+                    headerName: 'Shipping', 
+                    field: 'shipping', 
+                    width: 100, 
+                    sortable: true, 
+                    filter: 'agNumberColumnFilter',
+                    valueFormatter: params => `$${params.value.toFixed(2)}`
+                },
+                { headerName: 'Items', field: 'items', sortable: true, filter: true }
+            ],
+            defaultColDef: {
+                flex: 1,
+                minWidth: 100,
+                resizable: true,
+                filter: true,
+                filterParams: {
+                    buttons: ['apply', 'reset'],
+                    closeOnApply: true
                 }
             },
-            { headerName: 'Name', field: 'name', sortable: true, filter: true },
-            { headerName: 'State/Country', field: 'state', sortable: true, filter: true },
-            { headerName: 'Manufacturing', field: 'manufacturing', width: 170, sortable: true, filter: 'agNumberColumnFilter', filter: 'agNumberColumnFilter', comparator: greaterlessComparator, valueFormatter: currencyFormatter },
-            { headerName: 'Retail', field: 'retail', width: 100, sortable: true, filter: 'agNumberColumnFilter', filter: 'agNumberColumnFilter', comparator: greaterlessComparator, valueFormatter: currencyFormatter },
-            { headerName: 'Shipping', field: 'shipping', width: 100, sortable: true, filter: 'agNumberColumnFilter', filter: 'agNumberColumnFilter', comparator: greaterlessComparator, valueFormatter: currencyFormatter },
-            { headerName: 'Items', field: 'items', sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator }
-        ],
-        defaultColDef: {
-            flex: 1,
-            minWidth: 100,
-            resizable: true,
-            filter: true,
-            filterParams: {
-                buttons: ['apply', 'reset'],
-                closeOnApply: true
-            }
-        },
-        rowModelType: 'infinite',
-        datasource: {
-            getRows: function (params) {
+            // Change to client-side mode instead of infinite scroll
+            rowModelType: 'clientSide',
+            onGridReady: function(params) {
                 console.log('Fetching data...');
-                var year = yearSelect.value;
-                var quarter = document.getElementById('quarterSelect').value;
-                
-                var url = new URL('/api/state_taxes_data', window.location.origin);
-                url.searchParams.append('year', year);
-                url.searchParams.append('quarter', quarter);
-                url.searchParams.append('start', params.startRow);
-                url.searchParams.append('end', params.endRow);
-
-                fetch(url)
-                    .then(response => response.json())
-                    .then(data => {
-                        console.log('Data received:', data);
-                        params.successCallback(data.rows, data.lastRow);
-                        updateStatistics(data.rows);
-                    })
-                    .catch(error => {
-                        console.error('Error fetching data:', error);
-                        params.failCallback();
-                    });
+                fetchAndProcessData();
+                params.api.sizeColumnsToFit();
+            },
+            onGridSizeChanged: function(params) {
+                params.api.sizeColumnsToFit();
             }
-        },
-        onGridReady: function(params) {
-            params.api.sizeColumnsToFit();
-        },
-        onGridSizeChanged: function(params) {
-            params.api.sizeColumnsToFit();
-        }
-    };
-
-    function updateStatistics(rows) {
-        var salesCount = rows.length;
-        var totalRetail = 0;
-        var totalManufacturing = 0;
-        var totalShipping = 0;
-        var totalRetailOutsideWA = 0;
-        var totalManufacturingOutsideWA = 0;
-        var totalShippingOutsideWA = 0;
-
-        rows.forEach(function(row) {
-            totalRetail += row.retail;
-            totalManufacturing += row.manufacturing;
-            totalShipping += row.shipping;
+        };
+    
+        function fetchAndProcessData() {
+            var year = yearSelect.value;
+            var quarter = document.getElementById('quarterSelect').value;
             
-            if (row.state !== 'WA' && !row.state.startsWith('Washington')) {
-                totalRetailOutsideWA += row.retail;
-                totalManufacturingOutsideWA += row.manufacturing;
-                totalShippingOutsideWA += row.shipping;
-            }
+            var url = new URL('/api/state_taxes_data', window.location.origin);
+            url.searchParams.append('year', year);
+            url.searchParams.append('quarter', quarter);
+            // Remove start/end parameters since we're fetching all data
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Data received:', data);
+                    gridApi.setGridOption('rowData', data.rows);
+                    console.log('Processing tax data...');
+                    updateStatistics(data.rows);
+                })
+                .catch(error => {
+                    console.error('Error fetching data:', error);
+                });
+        }
+    
+        function updateStatistics(rows) {
+            var salesCount = rows.length;
+            let totalRetail = 0;
+            let totalManufacturing = 0;
+            let totalShipping = 0;
+            let totalRetailOutsideWA = 0;
+            let totalManufacturingOutsideWA = 0;
+            let totalShippingOutsideWA = 0;
+    
+            rows.forEach(function(row) {
+                totalRetail += row.retail;
+                totalManufacturing += row.manufacturing;
+                totalShipping += row.shipping;
+                
+                if (row.state !== 'WA' && !row.state.startsWith('Washington')) {
+                    totalRetailOutsideWA += row.retail;
+                    totalManufacturingOutsideWA += row.manufacturing;
+                    totalShippingOutsideWA += row.shipping;
+                }
+            });
+    
+            // Update statistics display
+            document.getElementById('salesCount').textContent = salesCount;
+            document.getElementById('totalRetail').textContent = totalRetail.toFixed(2);
+            document.getElementById('totalManufacturing').textContent = totalManufacturing.toFixed(2);
+            document.getElementById('totalShipping').textContent = totalShipping.toFixed(2);
+            document.getElementById('totalRetailOutsideWA').textContent = totalRetailOutsideWA.toFixed(2);
+            document.getElementById('totalManufacturingOutsideWA').textContent = totalManufacturingOutsideWA.toFixed(2);
+            document.getElementById('totalShippingOutsideWA').textContent = totalShippingOutsideWA.toFixed(2);
+    
+            // Update tax table
+            document.getElementById('manufacturingAmount').textContent = `$${totalManufacturing.toFixed(2)}`;
+            document.getElementById('retailingAmount').textContent = `$${(totalRetail + totalShipping).toFixed(2)}`;
+            document.getElementById('waManufacturedAmount').textContent = `$${totalManufacturing.toFixed(2)}`;
+            document.getElementById('interstateForeignAmount').textContent = `$${totalManufacturingOutsideWA.toFixed(2)}`;
+            document.getElementById('manufacturingDeductions').textContent = `$${totalShippingOutsideWA.toFixed(2)}`;
+            document.getElementById('retailingDeductions').textContent = `$${(totalRetailOutsideWA + totalShippingOutsideWA).toFixed(2)}`;
+        }
+    
+        var gridDiv = document.querySelector('#stateTaxesGrid');
+        var gridApi = agGrid.createGrid(gridDiv, gridOptions);
+    
+        // Add event listener for the export button
+        document.getElementById('exportSaleBtn').addEventListener('click', function() {
+            var fileQuarter = document.getElementById('quarterSelect').value;
+            var fileYear = document.getElementById('yearSelect').value;
+            var fileName = `Sales_${fileQuarter}_${fileYear}.csv`;
+    
+            gridApi.exportDataAsCsv({ fileName: fileName });
         });
-
-        document.getElementById('salesCount').textContent = salesCount;
-        document.getElementById('totalRetail').textContent = totalRetail.toFixed(2);
-        document.getElementById('totalManufacturing').textContent = totalManufacturing.toFixed(2);
-        document.getElementById('totalShipping').textContent = totalShipping.toFixed(2);
-        document.getElementById('totalRetailOutsideWA').textContent = totalRetailOutsideWA.toFixed(2);
-        document.getElementById('totalManufacturingOutsideWA').textContent = totalManufacturingOutsideWA.toFixed(2);
-        document.getElementById('totalShippingOutsideWA').textContent = totalShippingOutsideWA.toFixed(2);
-
-        // Update tax table
-        document.getElementById('manufacturingAmount').textContent = '$' + totalManufacturing.toFixed(2);
-        document.getElementById('retailingAmount').textContent = '$' + (totalRetail + totalShipping).toFixed(2);
-        document.getElementById('waManufacturedAmount').textContent = '$' + totalManufacturing.toFixed(2);
-        document.getElementById('interstateForeignAmount').textContent = '$' + totalManufacturingOutsideWA.toFixed(2);
-        document.getElementById('manufacturingDeductions').textContent = '$' + totalShippingOutsideWA.toFixed(2);
-        document.getElementById('retailingDeductions').textContent = '$' + (totalRetailOutsideWA + totalShippingOutsideWA).toFixed(2);
-    }
-
-    var gridDiv = document.querySelector('#stateTaxesGrid');
-    var gridApi = agGrid.createGrid(gridDiv, gridOptions);
-
-    document.getElementById('applyFilter').addEventListener('click', function() {
-        gridApi.purgeInfiniteCache();
-    });
-
-    window.addEventListener('resize', function() {
-        setTimeout(function() {
-            gridApi.sizeColumnsToFit();
+    
+        // Add event listener for the apply filter button
+        document.getElementById('applyFilter').addEventListener('click', function() {
+            fetchAndProcessData();
+        });
+    
+        // Add window resize handler
+        window.addEventListener('resize', function() {
+            setTimeout(function() {
+                gridApi.sizeColumnsToFit();
+            });
         });
     });
-});
 </script>
 {% endblock %}
