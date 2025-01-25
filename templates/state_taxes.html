@@ -34,6 +34,11 @@
                 <td id="interstateForeignAmount">$0.00</td>
                 <td id="interstateForeignDeductions"></td>
             </tr>
+            <tr>
+                <td>Sales in WA</td>
+                <td id="waSalesAmount">$0.00</td>
+                <td id="waSalesDeductions"></td>
+            </tr>
         </table>
     </div>
 
@@ -61,15 +66,15 @@
                 <td>$<span id="totalShipping">0.00</span></td>
             </tr>
             <tr>
-                <td>Total Retail (Outside WA)</td>
+                <td>Total Retail Outside WA</td>
                 <td>$<span id="totalRetailOutsideWA">0.00</span></td>
             </tr>
             <tr>
-                <td>Total Manufacturing (Outside WA)</td>
+                <td>Total Manufacturing Outside WA</td>
                 <td>$<span id="totalManufacturingOutsideWA">0.00</span></td>
             </tr>
             <tr>
-                <td>Total Shipping (Outside WA)</td>
+                <td>Total Shipping Outside WA</td>
                 <td>$<span id="totalShippingOutsideWA">0.00</span></td>
             </tr>
         </table>
@@ -279,17 +284,26 @@
             let totalRetailOutsideWA = 0;
             let totalManufacturingOutsideWA = 0;
             let totalShippingOutsideWA = 0;
+            let waSalesAmount = 0;
+    
+            const waZipRegex = /^[^,]+, WA 9\d{4}(-\d{4})?$/;
     
             rows.forEach(function(row) {
                 totalRetail += row.retail;
                 totalManufacturing += row.manufacturing;
                 totalShipping += row.shipping;
                 
-                if (row.state !== 'WA' && !row.state.startsWith('Washington')) {
+                if (!waZipRegex.test(row.state)) {
                     totalRetailOutsideWA += row.retail;
                     totalManufacturingOutsideWA += row.manufacturing;
                     totalShippingOutsideWA += row.shipping;
                 }
+
+                if (waZipRegex.test(row.state)) {
+                    waSalesAmount += row.retail;
+                    waSalesAmount += row.shipping;
+                }
+
             });
     
             // Update statistics display
@@ -306,8 +320,15 @@
             document.getElementById('retailingAmount').textContent = `$${(totalRetail + totalShipping).toFixed(2)}`;
             document.getElementById('waManufacturedAmount').textContent = `$${totalManufacturing.toFixed(2)}`;
             document.getElementById('interstateForeignAmount').textContent = `$${totalManufacturingOutsideWA.toFixed(2)}`;
+            document.getElementById('waSalesAmount').textContent = `$${waSalesAmount.toFixed(2)}`;
             document.getElementById('manufacturingDeductions').textContent = `$${totalShippingOutsideWA.toFixed(2)}`;
             document.getElementById('retailingDeductions').textContent = `$${(totalRetailOutsideWA + totalShippingOutsideWA).toFixed(2)}`;
+
+
+            document.getElementById('waManufacturedDeductions').textContent = "N/A";
+            document.getElementById('interstateForeignDeductions').textContent ="N/A";
+            document.getElementById('waSalesDeductions').textContent ="N/A";
+
         }
     
         var gridDiv = document.querySelector('#stateTaxesGrid');
