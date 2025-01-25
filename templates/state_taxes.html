@@ -142,7 +142,7 @@
                 { 
                     headerName: 'Date', 
                     field: 'date',
-                    width: 125,
+                    width: 100,
                     sortable: true, 
                     filter: 'agDateColumnFilter',
                     filterParams: {
@@ -168,7 +168,7 @@
                         window.open("/sales/view/" + params.data.id, '_blank');
                     } 
                 },
-                { headerName: 'Name', field: 'name', sortable: true, filter: true,
+                { headerName: 'Name', field: 'name', width: 150, sortable: true, filter: true,
                     onCellClicked: function(params){
                         window.open("/customers/view/" + params.data.customer_id, '_blank');
                     } 
@@ -230,11 +230,19 @@
                     filter: 'agNumberColumnFilter',
                     valueFormatter: params => `$${params.value.toFixed(2)}`
                 },
+                {
+                    headerName: 'Total',
+                    valueGetter: function(params) {return params.data.retail + params.data.shipping},
+                    width: 100, 
+                    sortable: true, 
+                    filter: 'agNumberColumnFilter',
+                    valueFormatter: params => `$${params.value.toFixed(2)}`
+                },
                 { headerName: 'Items', field: 'items', sortable: true, filter: true }
             ],
             defaultColDef: {
                 flex: 1,
-                minWidth: 100,
+                minWidth: 75,
                 resizable: true,
                 filter: true,
                 filterParams: {
