@@ -18,8 +18,8 @@
         <div class="customer-details">
             <h3>Customer Information</h3>
             {% if sale.customer.company %}<p><strong>Company:</strong> {{ sale.customer.company }}</p>{% endif %}
-            <p><strong>Name:</strong> {{ sale.customer.name }}</p>
-            <p><strong>Email:</strong> {{ sale.customer.email }}</p>
+            <p><strong>Name:</strong> <a href="{{ url_for('view_customer', id=sale.customer.id) }}"> {{ sale.customer.name }} </a></p>
+            <p><strong>Email:</strong> <a href="mailto: {{ sale.customer.email }}"> {{ sale.customer.email }} </a></p>
         </div>
     </div>
     
@@ -48,13 +48,13 @@
             <!-- <p>{{ sale.tracking if sale.tracking else '' }}</p> -->
             {% if sale.tracking %}
                 {% if sale.shipservice %}
-                    {% if sale.shipservice == 'USPS' %}
+                    {% if sale.shipservice.upper() == 'USPS' %}
                         <p><a href="https://tools.usps.com/go/TrackConfirmAction?qtc_tLabels1={{ sale.tracking }}" target="_blank">{{ sale.tracking }}</a></p>
-                    {% elif sale.shipservice == 'UPS' %}
+                    {% elif sale.shipservice.upper() == 'UPS' %}
                         <p><a href="https://wwwapps.ups.com/WebTracking/track?track=yes&trackNums={{ sale.tracking }}" target="_blank">{{ sale.tracking }}</a></p>
-                    {% elif sale.shipservice == 'DHL' %}
+                    {% elif sale.shipservice.upper() == 'DHL' %}
                         <p><a href="https://www.dhl.com/en/express/tracking.html?AWB={{ sale.tracking }}" target="_blank">{{ sale.tracking }}</a></p>
-                    {% elif sale.shipservice == 'FedEx' %}
+                    {% elif sale.shipservice.upper() == 'FEDEX' %}
                         <p><a href="https://www.fedex.com/apps/fedextrack/?tracknumbers={{ sale.tracking }}" target="_blank">{{ sale.tracking }}</a></p>
                     {% else %}
                         <p>{{ sale.tracking }}</p>
