@@ -1,6 +1,7 @@
 # sales_tracker
 
 Imports orders from ShipStation
+- On June 1, 2025, Shipstation is introducing new API requirements (requiring a higher tier plan) and this project will not be updated which means it will stop functioning with Shipstation.
 
 Allows calculation of totals for WA state taxes
 
