@@ -9,6 +9,7 @@ from flask.cli import with_appcontext
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
+from functools import wraps
 import io
 import json
 import logging
@@ -21,6 +22,8 @@ import pytz
 import random
 import re
 import requests
+import shippo
+from shippo import components
 from sqlalchemy import and_, create_engine, extract, func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import joinedload, sessionmaker
@@ -51,7 +54,7 @@ max_retries = 3
 retry_delay = 0.5
 
 # Use environment variable for secret key, with a fallback for development
-app.config['SECRET_KEY'] = 'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24) // disabled for testing only
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') #'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24) // disable for testing only
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db?timeout=20'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -113,6 +116,7 @@ def session_scope():
 # Retry decorator
 def retry_on_db_lock(max_retries=3, delay=0.1):
     def decorator(func):
+        @wraps(func)  # This preserves the original function's metadata
         def wrapper(*args, **kwargs):
             for attempt in range(max_retries):
                 try:
@@ -254,11 +258,18 @@ class ShipStationCredentials(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     api_key = db.Column(db.String(100), nullable=False)
     api_secret = db.Column(db.String(100), nullable=False)
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
 
 class WooCommerceCredentials(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     api_key = db.Column(db.String(100), nullable=False)
     api_secret = db.Column(db.String(100), nullable=False)
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
+
+class ShippoCredentials(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    api_key = db.Column(db.String(100), nullable=False)
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
 
 class BankTransaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -326,13 +337,25 @@ def index():
     total_customers = Customer.query.count()
     recent_sales = SalesReceipt.query.order_by(SalesReceipt.date.desc()).limit(10).all()
     company_info = CompanyInfo.get_info()
+    
+    # Get integration status
+    shippo_credentials = ShippoCredentials.query.first()
+    shipstation_credentials = ShipStationCredentials.query.first()
+    woocommerce_credentials = WooCommerceCredentials.query.first()
+    
+    shippo_enabled = shippo_credentials.enabled if shippo_credentials else False
+    shipstation_enabled = shipstation_credentials.enabled if shipstation_credentials else False
+    woocommerce_enabled = woocommerce_credentials.enabled if woocommerce_credentials else False
 
     return render_template('index.html', 
                            total_revenue=total_revenue,
                            total_sales=total_sales,
                            total_customers=total_customers,
                            recent_sales=recent_sales,
-                           company_info=company_info)
+                           company_info=company_info,
+                           shippo_enabled=shippo_enabled,
+                           shipstation_enabled=shipstation_enabled,
+                           woocommerce_enabled=woocommerce_enabled)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -367,6 +390,7 @@ def logout():
 @login_required
 def management():
     company_info = CompanyInfo.get_info()
+    shippo_credentials = ShippoCredentials.query.first()
     shipstation_credentials = ShipStationCredentials.query.first()
     woocommerce_credentials = WooCommerceCredentials.query.first()
 
@@ -399,23 +423,40 @@ def management():
             )
             db.session.add(new_info)
 
-        if shipstation_credentials:
-            shipstation_credentials.api_key = request.form['ss_api_key']
-            shipstation_credentials.api_secret = request.form['ss_api_secret']
+        # Update Shippo credentials
+        if shippo_credentials:
+            shippo_credentials.api_key = request.form['shippo_api_key']
+            shippo_credentials.enabled = 'shippo_enabled' in request.form
         else:
-            new_credentials = ShipStationCredentials(
-                api_key=request.form['ss_api_key'],
-                api_secret=request.form['ss_api_secret']
+            new_credentials = ShippoCredentials(
+                api_key=request.form['shippo_api_key'],
+                enabled='shippo_enabled' in request.form
             )
             db.session.add(new_credentials)
 
+        # Update ShipStation credentials
+        if shipstation_credentials:
+            shipstation_credentials.api_key = request.form['ss_api_key']
+            shipstation_credentials.api_secret = request.form['ss_api_secret']
+            shipstation_credentials.enabled = 'ss_enabled' in request.form
+        else:
+            new_credentials = ShipStationCredentials(
+                api_key=request.form['ss_api_key'],
+                api_secret=request.form['ss_api_secret'],
+                enabled='ss_enabled' in request.form
+            )
+            db.session.add(new_credentials)
+
+        # Update WooCommerce credentials
         if woocommerce_credentials:
             woocommerce_credentials.api_key = request.form['wc_api_key']
             woocommerce_credentials.api_secret = request.form['wc_api_secret']
+            woocommerce_credentials.enabled = 'wc_enabled' in request.form
         else:
             new_credentials = WooCommerceCredentials(
                 api_key=request.form['wc_api_key'],
-                api_secret=request.form['wc_api_secret']
+                api_secret=request.form['wc_api_secret'],
+                enabled='wc_enabled' in request.form
             )
             db.session.add(new_credentials)
 
@@ -428,7 +469,11 @@ def management():
 
         return redirect(url_for('management'))
 
-    return render_template('management.html', company_info=company_info, shipstation_credentials=shipstation_credentials, woocommerce_credentials=woocommerce_credentials)
+    return render_template('management.html', 
+                         company_info=company_info, 
+                         shippo_credentials=shippo_credentials, 
+                         shipstation_credentials=shipstation_credentials, 
+                         woocommerce_credentials=woocommerce_credentials)
 
 @app.route('/state_taxes')
 @login_required
@@ -747,7 +792,8 @@ def add_sale():
         tax=float(data['tax']),
         shipping=float(data['shipping']),
         customer_notes=data.get('customer_notes', ''),
-        internal_notes=data.get('internal_notes', '')
+        internal_notes=data.get('internal_notes', ''),
+        shipstation_order_id=data.get('shipstation_order_id', '')
     )
     db.session.add(new_sale)
     db.session.flush()
@@ -775,7 +821,7 @@ def get_sale(id):
     sale = SalesReceipt.query.options(joinedload(SalesReceipt.customer), joinedload(SalesReceipt.line_items)).get_or_404(id)
     return jsonify({
         'id': sale.id,
-        'shipstation_order_id': sale.shipstation_order_id,
+        'shipstation_order_id': sale.shipstation_order_id, # Used as a generic order ID
         'order_number': sale.order_number,
         'customer_id': sale.customer_id,
         'customer_name': sale.customer.name,
@@ -817,12 +863,13 @@ def edit_sale(id):
             sale.customer_id = int(request.form['customer_id'])
             sale.shipservice = request.form['shipservice']
             sale.tracking = request.form['tracking']
-            sale.shipdate = datetime.strptime(request.form['shipdate'],  '%Y-%m-%d')
+            sale.shipdate = datetime.strptime(request.form['shipdate'],  '%Y-%m-%d') if request.form['shipdate'] else None
             sale.date = datetime.strptime(request.form['date'], '%Y-%m-%dT%H:%M')
             sale.shipping = Decimal(request.form['shipping'])
             sale.tax = Decimal(request.form['tax'])
             sale.customer_notes = request.form['customer_notes']
             sale.internal_notes = request.form['internal_notes']
+            sale.shipstation_order_id = request.form['shipstation_order_id']
 
             # Handle line items
             # First, remove all existing line items
@@ -972,8 +1019,6 @@ def fetch_shipstation_orders():
             app.logger.error(f"Error fetching orders from ShipStation: {str(e)}")
             return jsonify({'error': 'Error fetching orders from ShipStation'}), 500
 
-    
-    
     orders_created = 0
     orders_updated = 0
     customers_created = 0
@@ -1243,6 +1288,170 @@ def update_notes(id):
         error_msg = f'Error committing changes to database: {str(e)}'
         app.logger.error(error_msg)
         return jsonify({'error': error_msg}), 500
+
+@app.route('/shippo/fetch_orders', methods=['POST'])
+@login_required
+@retry_on_db_lock()
+def fetch_shippo_orders():
+    credentials = ShippoCredentials.query.first()
+    if not credentials:
+        return jsonify({'error': 'Shippo credentials not found'}), 400
+    
+    start_date = request.form.get('start_date')
+    end_date = request.form.get('end_date')
+    
+    if not start_date or not end_date:
+        return jsonify({'error': 'Start date and end date are required'}), 400
+    
+    # Convert dates to correct format for Shippo API
+    try:
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        # Format as required by Shippo API (YYYY-MM-DDTHH:MM:SS)
+        start_formatted = start_dt.strftime('%Y-%m-%dT00:00:00')
+        end_formatted = end_dt.strftime('%Y-%m-%dT23:59:59')
+    except ValueError:
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+    
+    api_url = 'https://api.goshippo.com/orders'
+    
+    all_orders = []
+    page = 1
+    results_per_page = 25  # Shippo default is 25
+    
+    headers = {
+        'Authorization': f'ShippoToken {credentials.api_key}',
+        'Content-Type': 'application/json'
+    }
+
+    while True:
+        # Use correct Shippo API parameters
+        params = {
+            'results': results_per_page,
+            'page': page,
+            'start_date': start_formatted,
+            'end_date': end_formatted,
+            'order_status[]': 'SHIPPED'  # Correct array notation
+        }
+        
+        try:
+            response = requests.get(api_url, params=params, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+            app.logger.info(f"API URL: {api_url}")
+            app.logger.info(f"API params: {params}")
+            app.logger.info(f"Response status: {response.status_code}")
+            app.logger.info(f"Response content: {data}")
+            
+            orders = data.get('results', [])
+            all_orders.extend(orders)
+            
+            # Check if there are more pages
+            if not data.get('next'):
+                break
+                
+            page += 1
+        except requests.RequestException as e:
+            app.logger.error(f"Error fetching orders from Shippo: {str(e)}")
+            return jsonify({'error': 'Error fetching orders from Shippo'}), 500
+
+    # If still no orders, try a broader search without filters
+    if not all_orders:
+        app.logger.info("No orders found with filters, trying without date/status filters...")
+        try:
+            params_simple = {
+                'results': 25,
+                'page': 1
+            }
+            response = requests.get(api_url, params=params_simple, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            app.logger.info(f"Simple query results: {data}")
+            
+            if not data.get('results'):
+                return jsonify({
+                    'message': 'No orders found in Shippo. Orders are typically created when you generate shipping labels or connect an e-commerce platform.',
+                    'suggestion': 'Try creating a test order first or check if your e-commerce platform is connected.'
+                })
+                
+        except requests.RequestException as e:
+            app.logger.error(f"Error in simple query: {str(e)}")
+
+    orders_created = 0
+    orders_updated = 0
+    errors = []
+
+    Session = db.session.session_factory
+    session = Session()
+
+    try:
+        processed_orders = process_shippo_data(all_orders)
+        
+        for order in processed_orders:
+            try:
+                with session.begin_nested():
+                    customer = get_or_create_customer(order['customer'])
+                    
+                    existing_sale = session.query(SalesReceipt).filter_by(
+                        order_number=order['order_number']
+                    ).first()
+
+                    if existing_sale:
+                        existing_sale.customer_id = customer.id
+                        existing_sale.date = order['order_date']
+                        existing_sale.total = order['order_total']
+                        existing_sale.tax = order['tax_amount']
+                        existing_sale.shipping = order['shipping_amount']
+                        existing_sale.customer_notes = order.get('customer_notes', '')
+                        existing_sale.internal_notes = order.get('internal_notes', '')
+                        orders_updated += 1
+                    else:
+                        new_sale = SalesReceipt(
+                            customer_id=customer.id,
+                            shipstation_order_id=order['order_id'],
+                            order_number=order['order_number'],
+                            date=order['order_date'],
+                            total=order['order_total'],
+                            tax=order['tax_amount'],
+                            shipping=order['shipping_amount'],
+                            customer_notes=order.get('customer_notes', ''),
+                            internal_notes=order.get('internal_notes', '')
+                        )
+                        session.add(new_sale)
+                        session.flush()
+                        orders_created += 1
+                
+                # Process line items
+                sale = existing_sale or new_sale
+                process_line_items(sale, order['items'], session)
+
+            except Exception as e:
+                session.rollback()
+                error_msg = f"Error processing order {order['order_number']}: {str(e)}"
+                app.logger.error(error_msg)
+                errors.append(error_msg)
+                continue
+
+        session.commit()
+        
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+    message = (f'Successfully processed Shippo orders. '
+               f'Created {orders_created} new orders. '
+               f'Updated {orders_updated} existing orders.')
+    if errors:
+        message += f' Encountered {len(errors)} errors.'
+    
+    return jsonify({
+        'message': message,
+        'errors': errors
+    }), 200 if not errors else 207
 
 @app.route('/finance')
 @login_required
@@ -1679,6 +1888,92 @@ def process_shipstation_data(shipstation_orders):
 
     return processed_orders
 
+def process_shippo_data(shippo_orders):
+    processed_orders = []
+    
+    for order in shippo_orders:
+        try:
+            # Extract customer data from to_address
+            to_address = order.get('to_address', {})
+            customer_data = {
+                'name': to_address.get('name', 'Unknown'),
+                'email': to_address.get('email') or order.get('email', ''),
+                'company': to_address.get('company', ''),
+                'street1': to_address.get('street1', ''),
+                'street2': to_address.get('street2', ''),
+                'street3': to_address.get('street3', ''),
+                'city': to_address.get('city', ''),
+                'state': to_address.get('state', ''),
+                'postal_code': to_address.get('zip', ''),
+                'country': to_address.get('country', ''),
+                'phone': to_address.get('phone', ''),
+            }
+            
+            # Parse order date - fix for Shippo's Z-terminated dates
+            order_date = order.get('placed_at') or order.get('object_created')
+            if order_date:
+                # Handle Z-terminated UTC dates from Shippo
+                if order_date.endswith('Z'):
+                    # Remove Z and parse as UTC
+                    order_date = datetime.strptime(order_date[:-1], '%Y-%m-%dT%H:%M:%S')
+                    order_date = order_date.replace(tzinfo=timezone.utc)
+                else:
+                    # Try other common formats
+                    try:
+                        order_date = datetime.strptime(order_date.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+                    except ValueError:
+                        order_date = datetime.strptime(order_date, '%Y-%m-%d')
+            else:
+                order_date = datetime.now()
+            
+            # Process line items
+            items = []
+            for item in order.get('line_items', []):
+                # Handle different price formats
+                total_price = item.get('total_price', '0')
+                if isinstance(total_price, str):
+                    total_price = Decimal(total_price)
+                elif isinstance(total_price, (int, float)):
+                    total_price = Decimal(str(total_price))
+                
+                # Calculate unit price from total price and quantity
+                quantity = int(item.get('quantity', 1))
+                unit_price = total_price / quantity if quantity > 0 else Decimal('0')
+                
+                items.append({
+                    'sku': item.get('sku', 'Unknown SKU'),
+                    'name': item.get('title', 'Unknown Item'),
+                    'quantity': quantity,
+                    'unit_price': unit_price,
+                    'options': []
+                })
+            
+            # Extract order totals - handle string/numeric values
+            total_price = Decimal(str(order.get('total_price', '0')))
+            shipping_cost = Decimal(str(order.get('shipping_cost', '0')))
+            total_tax = Decimal(str(order.get('total_tax', '0')))
+            
+            processed_order = {
+                'order_id': order.get('object_id', ''),
+                'order_number': order.get('order_number', ''),
+                'order_date': order_date,
+                'customer': customer_data,
+                'items': items,
+                'order_total': total_price,
+                'tax_amount': total_tax,
+                'shipping_amount': shipping_cost,
+                'customer_notes': order.get('notes', ''),
+                'internal_notes': f"Imported from {order.get('shop_app', 'Shippo')} via Shippo API"
+            }
+            
+            processed_orders.append(processed_order)
+            
+        except Exception as e:
+            app.logger.error(f"Error processing Shippo order {order.get('order_number', 'Unknown')}: {str(e)}")
+            continue
+            
+    return processed_orders
+
 def parse_shipstation_date(date_str):
     # Split the string at the dot to separate the fractional seconds
     parts = date_str.split('.')
@@ -1840,4 +2135,4 @@ def is_duplicate_transaction(new_transaction):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True, host="0.0.0.0", port=4444)
+    app.run(debug=False, host="0.0.0.0", port=4444, use_reloader=True)

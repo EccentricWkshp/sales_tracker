@@ -22,23 +22,69 @@
         </div>
     </div>
     
-    <div class="shipstation-integration">
-        <h2>ShipStation</h2>
-        <form id="shipstationForm">
-            <div class="form-container">
-                <div class="form-group">
-                    <label for="start_date">Start Date: </label>
-                    <input type="date" id="start_date" name="start_date" class="form-control" required>
+    {% if shippo_enabled or shipstation_enabled or woocommerce_enabled %}
+    <div class="integrations-container">
+        {% if shippo_enabled %}
+        <div class="integration-section">
+            <h2>Shippo</h2>
+            <form id="shippoForm">
+                <div class="form-container">
+                    <div class="form-group">
+                        <label for="shippo_start_date">Start Date:</label>
+                        <input type="date" id="shippo_start_date" name="start_date" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="shippo_end_date">End Date:</label>
+                        <input type="date" id="shippo_end_date" name="end_date" class="form-control" required>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="end_date">End Date: </label>
-                    <input type="date" id="end_date" name="end_date" class="form-control" required>
+                <button type="submit" class="btn btn-primary">Fetch Shippo Orders</button>
+            </form>
+            <div id="shippoResult" class="mt-3"></div>
+        </div>
+        {% endif %}
+
+        {% if shipstation_enabled %}
+        <div class="integration-section">
+            <h2>ShipStation</h2>
+            <form id="shipstationForm">
+                <div class="form-container">
+                    <div class="form-group">
+                        <label for="ss_start_date">Start Date:</label>
+                        <input type="date" id="ss_start_date" name="start_date" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="ss_end_date">End Date:</label>
+                        <input type="date" id="ss_end_date" name="end_date" class="form-control" required>
+                    </div>
                 </div>
-            </div>
-            <button type="submit" class="btn btn-primary">Fetch ShipStation Orders</button>
-        </form>
-        <div id="shipstationResult" class="mt-3"></div>
+                <button type="submit" class="btn btn-primary">Fetch ShipStation Orders</button>
+            </form>
+            <div id="shipstationResult" class="mt-3"></div>
+        </div>
+        {% endif %}
+
+        {% if woocommerce_enabled %}
+        <div class="integration-section">
+            <h2>WooCommerce</h2>
+            <form id="woocommerceForm">
+                <div class="form-container">
+                    <div class="form-group">
+                        <label for="wc_start_date">Start Date:</label>
+                        <input type="date" id="wc_start_date" name="start_date" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="wc_end_date">End Date:</label>
+                        <input type="date" id="wc_end_date" name="end_date" class="form-control" required>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary">Fetch WooCommerce Orders</button>
+            </form>
+            <div id="woocommerceResult" class="mt-3"></div>
+        </div>
+        {% endif %}
     </div>
+    {% endif %}
 
     <div class="recent-sales">
         <h2>Recent Sales</h2>
@@ -111,8 +157,8 @@
                         }
                     }
                 },
-                { headerName: 'Order #', field: 'order_number', sortable: true, filter: true, flex: 1 },
-                { headerName: 'SS #', field: 'shipstation_order_id', sortable: true, filter: true, flex: 1 },
+                { headerName: 'Order #', field: 'shipstation_order_id', sortable: true, filter: true, flex: 1 },
+                { headerName: 'Receipt #', field: 'order_number', sortable: true, filter: true, flex: 1 },
                 { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
                 { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator, flex: 1 },
             ],
@@ -152,9 +198,35 @@
             gridDiv.gridInitialized = true;
         }
 
+        // Set default dates (last 7 days)
+        const today = new Date();
+        today.setDate(today.getDate() + 1);
+        const todayString = today.toISOString().split('T')[0];
+        
+        const priorDate = new Date();
+        priorDate.setDate(today.getDate() - 7);
+        const priorDateString = priorDate.toISOString().split('T')[0];
+        
+        // Set dates for each form
+        {% if shippo_enabled %}
+        document.getElementById('shippo_start_date').value = priorDateString;
+        document.getElementById('shippo_end_date').value = todayString;
+        {% endif %}
+        
+        {% if shipstation_enabled %}
+        document.getElementById('ss_start_date').value = priorDateString;
+        document.getElementById('ss_end_date').value = todayString;
+        {% endif %}
+        
+        {% if woocommerce_enabled %}
+        document.getElementById('wc_start_date').value = priorDateString;
+        document.getElementById('wc_end_date').value = todayString;
+        {% endif %}
+
     });
 
     $(document).ready(function() {
+        {% if shipstation_enabled %}
         $('#shipstationForm').submit(function(e) {
             e.preventDefault();
             $.ajax({
@@ -163,10 +235,9 @@
                 data: $(this).serialize(),
                 success: function(response) {
                     $('#shipstationResult').html('<div class="alert alert-success">' + response.message + '</div>');
-                    // Wait for a few seconds before reloading the page
                     setTimeout(function() {
                         location.reload();
-                    }, 1500); // 3000 milliseconds = 3 seconds
+                    }, 1500);
                 },
                 error: function(xhr) {
                     var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
@@ -174,7 +245,51 @@
                 }
             });
         });
+        {% endif %}
+        
+        {% if shippo_enabled %}
+        $('#shippoForm').submit(function(e) {
+            e.preventDefault();
+            $.ajax({
+                url: '/shippo/fetch_orders',
+                method: 'POST',
+                data: $(this).serialize(),
+                success: function(response) {
+                    $('#shippoResult').html('<div class="alert alert-success">' + response.message + '</div>');
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1500);
+                },
+                error: function(xhr) {
+                    var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
+                    $('#shippoResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
+                }
+            });
+        });
+        {% endif %}
+        
+        {% if woocommerce_enabled %}
+        $('#woocommerceForm').submit(function(e) {
+            e.preventDefault();
+            $.ajax({
+                url: '/woocommerce/fetch_orders',
+                method: 'POST',
+                data: $(this).serialize(),
+                success: function(response) {
+                    $('#woocommerceResult').html('<div class="alert alert-success">' + response.message + '</div>');
+                    setTimeout(function() {
+                        location.reload();
+                    }, 1500);
+                },
+                error: function(xhr) {
+                    var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
+                    $('#woocommerceResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
+                }
+            });
+        });
+        {% endif %}
     });
+
     </script>
     {% endblock %}
 </div>

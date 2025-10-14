@@ -124,7 +124,7 @@
             var filterYear;
 
             // Set the year to the previous year if we are in Q1
-            if (currentQuarter = 1) {
+            if (currentQuarter = 0) {
                 filterYear = previousYear;
             } else {
                 filterYear = currentYear;
@@ -241,7 +241,6 @@
                 { headerName: 'Items', field: 'items', sortable: true, filter: true }
             ],
             defaultColDef: {
-                flex: 1,
                 minWidth: 75,
                 resizable: true,
                 filter: true,

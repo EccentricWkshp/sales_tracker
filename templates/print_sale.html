@@ -89,7 +89,8 @@
         </div>
         <div>
             <strong>Invoice #:</strong> {{ sale.id }}<br>
-            <strong>Order #:</strong> {{ sale.order_number }}<br>
+            <!-- <strong>Receipt #:</strong> {{ sale.order_number }}<br> -->
+            {% if sale.shipstation_order_id %}<strong>Order #: </strong>  {{ sale.shipstation_order_id }}<br>{% endif %}
             <strong>Date:</strong> {{ sale.date.strftime('%B %d, %Y') }}
         </div>
     </div>

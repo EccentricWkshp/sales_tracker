@@ -17,6 +17,10 @@
             <label for="date">Date:</label>
             <input type="datetime-local" id="date" name="date" value="{{ sale.date.strftime('%Y-%m-%dT%H:%M') }}" required>
         </div>
+        <div class="form-group">
+            <label for="shipstation_order_id">Order ID:</label>
+            <input type="text" id="shipstation_order_id" name="shipstation_order_id" value="{{ sale.shipstation_order_id if sale.shipstation_order_id else '' }}">
+        </div>
         <div class="customer-info">
             <div class="form-group">
                 <label for="customer">Customer:</label>

@@ -33,17 +33,38 @@
             {% endif %}
         </div>
 
+        <h2>Shippo Settings</h2>
+        <div class="form-group">
+            <input type="checkbox" class="form-check-input" id="shippo_enabled" name="shippo_enabled" 
+                   {% if shippo_credentials and shippo_credentials.enabled %}checked{% endif %}>
+            <label class="form-check-label" for="shippo_enabled">Enable Shippo Integration</label>
+        </div>
+        <div class="form-group">
+            <label for="shippo_api_key">API Key</label>
+            <input type="text" id="shippo_api_key" name="shippo_api_key" class="form-control" value="{{ shippo_credentials.api_key if shippo_credentials else '' }}">
+        </div>
+        
         <h2>ShipStation Settings</h2>
         <div class="form-group">
+            <input type="checkbox" class="form-check-input" id="ss_enabled" name="ss_enabled" 
+                   {% if shipstation_credentials and shipstation_credentials.enabled %}checked{% endif %}>
+            <label class="form-check-label" for="ss_enabled">Enable ShipStation Integration</label>
+        </div>
+        <div class="form-group">
             <label for="ss_api_key">API Key</label>
-            <input type="text" id="ss_api_key" name="ss_api_key" class="form-control" value="{{ shipstation_credentials.api_key if shipstation_credentials else '' }}" required>
+            <input type="text" id="ss_api_key" name="ss_api_key" class="form-control" value="{{ shipstation_credentials.api_key if shipstation_credentials else '' }}">
         </div>
         <div class="form-group">
             <label for="ss_api_secret">API Secret</label>
-            <input type="password" id="ss_api_secret" name="ss_api_secret" class="form-control" value="{{ shipstation_credentials.api_secret if shipstation_credentials else '' }}" required>
+            <input type="password" id="ss_api_secret" name="ss_api_secret" class="form-control" value="{{ shipstation_credentials.api_secret if shipstation_credentials else '' }}">
         </div>
 
         <h2>WooCommerce Settings</h2>
+        <div class="form-group">
+            <input type="checkbox" class="form-check-input" id="wc_enabled" name="wc_enabled" 
+                   {% if woocommerce_credentials and woocommerce_credentials.enabled %}checked{% endif %}>
+            <label class="form-check-label" for="wc_enabled">Enable WooCommerce Integration</label>
+        </div>
         <div class="form-group">
             <label for="wc_api_key">API Key</label>
             <input type="text" id="wc_api_key" name="wc_api_key" class="form-control" value="{{ woocommerce_credentials.api_key if woocommerce_credentials else '' }}">

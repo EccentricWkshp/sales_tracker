@@ -700,3 +700,35 @@ header .container {
 .ag-header-cell-filtered span {
     color: #fff !important;
 }
+
+/* Integration sections side-by-side */
+.integrations-container {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 30px;
+    flex-wrap: wrap;
+}
+
+.integration-section {
+    flex: 1;
+    min-width: 300px;
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.integration-section h2 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #2c3e50;
+}
+
+.integration-section .form-container {
+    flex-direction: column;
+}
+
+.integration-section .form-group {
+    margin-right: 0;
+    margin-bottom: 10px;
+}
