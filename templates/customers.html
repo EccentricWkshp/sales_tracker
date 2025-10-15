@@ -149,6 +149,7 @@ var gridOptions = {
         {% endfor %}
     ],
     defaultColDef: {
+        minWidth: 100,
         resizable: true,
         comparator: caseInsensitiveComparator,
         filterParams: {
@@ -168,17 +169,24 @@ function deleteCustomer(customerId) {
         url: "/customers/delete/" + customerId,
         method: "POST",
             success: function(response) {
-                $('#deleteResult').html('<div class="alert alert-success">' + response.success + '</div>');
-                // Wait for a few seconds before reloading the page
-                setTimeout(function() {
-                    //location.reload();
-                    refreshGrid('/api/customers', gridApi);
-                    $('#deleteResult').html('');
-                }, 1500); // 3000 milliseconds = 3 seconds
+                if (response.success) {
+                    // $('#deleteResult').html('<div class="alert alert-success">' + response.success + '</div>');
+                    // Wait for a few seconds before reloading the page
+                    setTimeout(function() {
+                        //location.reload();
+                        refreshGrid('/api/customers', gridApi);
+                        $('#deleteResult').html('');
+                    }, 1500); // 3000 milliseconds = 3 seconds
+                    showFlashMessage(response.message, response.category);
+                } else {
+                    showFlashMessage(response.message || "Error deleting customer", response.category || 'error');
+                }
             },
             error: function(xhr) {
-                var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
-                $('#deleteResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
+                var errorMessage = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'An error occurred while deleting the customer';
+                showFlashMessage(errorMessage, 'error');
+
+                //$('#deleteResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
                 setTimeout(function() {
                     //location.reload();
                     refreshGrid('/api/customers', gridApi);
@@ -307,9 +315,16 @@ $(document).ready(function() {
                     modal.hide();
                     //location.reload();
                     refreshGrid('/api/customers', gridApi);
+                    showFlashMessage(response.message, response.category);
                 } else {
-                    alert("Error saving customer");
+                    showFlashMessage(response.message || "Error saving customer", response.category || 'error');
+                    // alert("Error saving customer");
                 }
+            },
+            error: function(xhr) {
+                var errorMessage = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'An error occurred while saving the customer';
+                showFlashMessage(errorMessage, 'error');
+                // alert("Error saving customer: " + errorMessage);
             }
         });
     });

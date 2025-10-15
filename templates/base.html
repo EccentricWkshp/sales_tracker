@@ -29,6 +29,50 @@
     <link rel="stylesheet" href="https://unpkg.com/ag-grid-community/styles/ag-theme-alpine.css">
     <script src="https://unpkg.com/ag-grid-community/dist/ag-grid-community.min.noStyle.js"></script>
 
+    <script>
+    // Function to display flash messages dynamically
+    function showFlashMessage(message, category) {
+        // Remove any existing flash messages
+        var existingFlash = document.querySelector('.flash-messages');
+        if (existingFlash) {
+            existingFlash.remove();
+        }
+        
+        // Create the flash message container
+        var flashContainer = document.createElement('ul');
+        flashContainer.className = 'flash-messages';
+        
+        // Create the flash message item
+        var flashItem = document.createElement('li');
+        flashItem.className = 'flash-message flash-' + category;
+        flashItem.textContent = message;
+        
+        // Create the close button
+        var closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'flash-close';
+        closeBtn.innerHTML = '&times;';
+        closeBtn.onclick = function() {
+            flashContainer.remove();
+        };
+        
+        flashItem.appendChild(closeBtn);
+        flashContainer.appendChild(flashItem);
+        
+        // Insert at the top of the body
+        document.body.insertBefore(flashContainer, document.body.firstChild);
+        
+        // Auto-dismiss after 5 seconds
+        setTimeout(function() {
+            flashContainer.style.opacity = '0';
+            flashContainer.style.transition = 'opacity 0.3s ease-out';
+            setTimeout(function() {
+                flashContainer.remove();
+            }, 300);
+        }, 5000);
+    }
+    </script>
+
     {% block extra_head %}{% endblock %}
 </head>
 <body>

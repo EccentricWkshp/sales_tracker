@@ -54,7 +54,7 @@ max_retries = 3
 retry_delay = 0.5
 
 # Use environment variable for secret key, with a fallback for development
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') #'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24) // disable for testing only
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or os.urandom(24) # disable for testing only
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db?timeout=20'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -566,44 +566,58 @@ def customers():
 @app.route('/customers/add', methods=['POST'])
 @login_required
 def add_customer():
-    data = request.json
-    
-    #get_or_create_customer(data)  will want to try to swtich to this at some point
+    try:
+        data = request.json
+        
+        #get_or_create_customer(data)  will want to try to swtich to this at some point
 
-    if not data['email']:
-        # Generate a unique placeholder email
-        placeholder_email = f"placeholder_{uuid.uuid4().hex}@example.com"
-        app.logger.warning(f"Missing customer email. Generated placeholder: {placeholder_email}")
-        data['email'] = placeholder_email
-    
-    new_customer = Customer(
-        name=data['name'],
-        company=data['company'],
-        email=data['email'],
-        email_2=data['email_2'],
-        phone=data['phone'],
-        billing_address=data['billing_address'],
-        shipping_address=data['shipping_address']
-    )
-    db.session.add(new_customer)
-    db.session.commit()
-    
-    return jsonify({'success': True, 'id': new_customer.id})
+        if not data['email']:
+            # Generate a unique placeholder email
+            placeholder_email = f"placeholder_{uuid.uuid4().hex}@example.com"
+            app.logger.warning(f"Missing customer email. Generated placeholder: {placeholder_email}")
+            data['email'] = placeholder_email
+        
+        new_customer = Customer(
+            name=data['name'],
+            company=data['company'],
+            email=data['email'],
+            email_2=data['email_2'],
+            phone=data['phone'],
+            billing_address=data['billing_address'],
+            shipping_address=data['shipping_address']
+        )
+        db.session.add(new_customer)
+        db.session.commit()
+        
+        app.logger.info(f"Successfully added customer {new_customer.name}")
+        
+        return jsonify({'success': True, 'id': new_customer.id, 'message': f'Customer {new_customer.name} added successfully.', 'category': 'success'}), 200
+    except Exception as e:
+        db.session.rollback()
+        # Hide this error because we have a better error display method through showFlashMessage
+        #app.logger.error(f"Error adding customer {new_customer.name}: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error adding customer: {str(e)}', 'category': 'error'}), 400
 
 @app.route('/customers/edit/<int:id>', methods=['POST'])
 @login_required
 def edit_customer(id):
-    customer = Customer.query.get_or_404(id)
-    data = request.json
-    customer.name = data['name']
-    customer.company = data['company']
-    customer.email = data['email']
-    customer.email_2 = data['email_2']
-    customer.phone = data['phone']
-    customer.billing_address = data['billing_address']
-    customer.shipping_address = data['shipping_address']
-    db.session.commit()
-    return jsonify({'success': True})
+    try:
+        customer = Customer.query.get_or_404(id)
+        data = request.json
+        customer.name = data['name']
+        customer.company = data['company']
+        customer.email = data['email']
+        customer.email_2 = data['email_2']
+        customer.phone = data['phone']
+        customer.billing_address = data['billing_address']
+        customer.shipping_address = data['shipping_address']
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Customer updated successfully.', 'category': 'success'}), 200
+    except Exception as e:
+        db.session.rollback()
+        # Hide this error because we have a better error display method through showFlashMessage
+        #app.logger.error(f"Error updating customer: {str(e)}")
+        return jsonify({'success': False, 'message': f'Error updating customer: {str(e)}', 'category': 'error'}), 400
 
 @app.route('/customers/get/<int:id>')
 @login_required
@@ -640,11 +654,14 @@ def delete_customer(id):
     try:
         db.session.delete(customer)
         db.session.commit()
-        return jsonify({"success": f"Deleted {customer.name}"}), 200
+        #return jsonify({"success": f"Deleted {customer.name}"}), 200
+        return jsonify({'success': True, 'message': f'{customer.name} deleted successfully.', 'category': 'success'}), 200
     except IntegrityError:
         db.session.rollback()
-        app.logger.error(f"Error deleting customer: {customer.name}")
-        return jsonify({"error": f"Cannot delete {customer.name}: associated sales receipts"}), 400
+        # Hide this error because we have a better error display method through showFlashMessage
+        #app.logger.error(f"Error deleting customer: {customer.name}")
+        #return jsonify({"error": f"Cannot delete {customer.name}: associated sales receipts"}), 400
+        return jsonify({'success': False, 'message': f'Unable to delete {customer.name}: associated sales receipts.', 'category': 'error'}), 400
 
 @app.route('/customers/merge', methods=['POST'])
 @login_required

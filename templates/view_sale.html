@@ -26,11 +26,11 @@
     <div class="customer-info">
         <div class="billing-address">
             <h3>Billing Address</h3>
-            <p>{{ sale.customer.billing_address | nl2br }}</p>
+            <p><a href="https://www.google.com/maps/place/{{ sale.customer.billing_address | nl2br }}" target="_blank">{{ sale.customer.billing_address | nl2br }}</a></p>
         </div>
         <div class="shipping-address">
             <h3>Shipping Address</h3>
-            <p>{{ sale.customer.shipping_address | nl2br }}</p>
+            <p><a href="https://www.google.com/maps/place/{{ sale.customer.shipping_address | nl2br }}" target="_blank">{{ sale.customer.shipping_address | nl2br }}</a></p>
         </div>
     </div>
 

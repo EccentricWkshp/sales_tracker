@@ -17,11 +17,11 @@
 
     <div class="address-pane">
         <h2>Billing Address</h2>
-        <p>{{ customer.billing_address | nl2br }}</p>
+        <p><a href="https://www.google.com/maps/place/{{ customer.billing_address | nl2br }}" target="_blank">{{ customer.billing_address | nl2br }}</a></p>
     </div>
     <div class="address-pane">
         <h2>Shipping Address</h2>
-        <p>{{ customer.shipping_address | nl2br }}</p>
+        <p><a href="https://www.google.com/maps/place/{{ customer.shipping_address | nl2br }}" target="_blank">{{ customer.shipping_address | nl2br }}</a></p>
     </div>
 </div>
 
@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     { headerName: 'Items', field: 'items', sortable: true, filter: true }
                 ],
                 defaultColDef: {
-                    flex: 1,
+                    //flex: 1,
                     //minWidth: 100,
                     resizable: true,
                     filterParams: {
