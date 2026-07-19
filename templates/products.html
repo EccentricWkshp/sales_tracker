@@ -28,6 +28,12 @@
                 <label for="price">Price</label>
                 <input type="text" id="price" name="price" required>
             </div>
+            <div class="form-group">
+                <label for="isManufactured">
+                    <input type="checkbox" id="isManufactured" name="is_manufactured">
+                    Manufactured in WA (counts toward B&amp;O manufacturing)
+                </label>
+            </div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Product</button>
         </form>
     </div>
@@ -78,7 +84,10 @@
                 },
                 { headerName: 'SKU', field: 'sku', sortable: true, sort: 'asc', filter: true },
                 { headerName: 'Description', field: 'description', sortable: true, filter: true },
-                { headerName: 'Price', field: 'price', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator }
+                { headerName: 'Price', field: 'price', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
+                { headerName: 'Manufactured', field: 'is_manufactured', maxWidth: 140, sortable: true, filter: true,
+                    cellRenderer: params => params.value ? '<i class="fas fa-check"></i>' : ''
+                }
             ],
             rowData: [
                 {% for product in products %}
@@ -86,7 +95,8 @@
                     id: {{ product.id }},
                     sku: '{{ product.sku|cleaned }}',
                     description: '{{ product.description|cleaned }}',
-                    price: '{{ "%.2f"|format(product.price) }}'
+                    price: '{{ "%.2f"|format(product.price) }}',
+                    is_manufactured: {{ 'true' if product.is_manufactured else 'false' }}
                 },
                 {% endfor %}
             ],
@@ -128,6 +138,7 @@
             $("#sku").val(data.sku);
             $("#description").val(data.description);
             $("#price").val(('$' + data.price.toFixed(2).replace(/\B(?=(?:\d{3})+(?!\d))/g, ',')));
+            $("#isManufactured").prop("checked", data.is_manufactured);
             $("#productModal").show();
         });
     }
@@ -173,7 +184,8 @@
                 data: JSON.stringify({
                     sku: $("#sku").val(),
                     description: $("#description").val(),
-                    price: cleave.getRawValue()
+                    price: cleave.getRawValue(),
+                    is_manufactured: $("#isManufactured").prop("checked")
                 }),
                 contentType: "application/json",
                 success: function(response) {

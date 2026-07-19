@@ -54,7 +54,7 @@ max_retries = 3
 retry_delay = 0.5
 
 # Use environment variable for secret key, with a fallback for development
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY') or os.urandom(24) # disable for testing only
+app.config['SECRET_KEY'] = 'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24) # disable for testing only
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db?timeout=20'
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -182,13 +182,16 @@ class Product(db.Model):
     sku = db.Column(db.String(20), unique=True, nullable=False)
     description = db.Column(db.String(200), nullable=False)
     price = db.Column(db.Float, nullable=False)
+    # Counts toward the WA B&O manufacturing classification on the state taxes report
+    is_manufactured = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
 
     def to_dict(self):
         return {
             'id': self.id,
             'sku': self.sku,
             'description': self.description,
-            'price': self.price
+            'price': self.price,
+            'is_manufactured': self.is_manufactured
         }
 
 class SalesReceipt(db.Model):
@@ -478,63 +481,51 @@ def management():
 @app.route('/state_taxes')
 @login_required
 def state_taxes():
-    sales = SalesReceipt.query.options(joinedload(SalesReceipt.customer)).all()
-    sorted_sales = sorted(sales, key=lambda sale: sale.date, reverse=True)
-
-    company_info = CompanyInfo.get_info()
-    
-    return render_template('state_taxes.html', sales=sorted_sales, company_info=company_info)
+    # The grid loads its data from /api/state_taxes_data
+    return render_template('state_taxes.html', company_info=CompanyInfo.get_info())
 
 @app.route('/api/state_taxes_data')
 @login_required
 def get_state_taxes_data():
     year = request.args.get('year', type=int)
-    quarter = request.args.get('quarter')
-    start = request.args.get('start', type=int, default=0)
-    end = request.args.get('end', type=int, default=100)
+    quarter = (request.args.get('quarter') or '').upper()
+    start = request.args.get('start', type=int)
+    end = request.args.get('end', type=int)
 
-    # Define date ranges for quarters
-    date_ranges = {
-        'Q1': (f'{year}-01-01 00:00:00', f'{year}-03-31 23:59:59'),
-        'Q2': (f'{year}-04-01 00:00:00', f'{year}-06-30 23:59:59'),
-        'Q3': (f'{year}-07-01 00:00:00', f'{year}-09-30 23:59:59'),
-        'Q4': (f'{year}-10-01 00:00:00', f'{year}-12-31 23:59:59'),
-    }
+    quarter_start_months = {'Q1': 1, 'Q2': 4, 'Q3': 7, 'Q4': 10}
+    if year is None or quarter not in quarter_start_months:
+        return jsonify({'error': 'year (integer) and quarter (Q1-Q4) are required'}), 400
 
-    ''' Save for later to undo if needed
-    date_ranges = {
-        'Q1': (f'{year}-01-01', f'{year}-03-31'),
-        'Q2': (f'{year}-04-01', f'{year}-06-30'),
-        'Q3': (f'{year}-07-01', f'{year}-09-30'),
-        'Q4': (f'{year}-10-01', f'{year}-12-31'),
-    }
-    '''
-
-    start_date, end_date = date_ranges.get(quarter, ('', ''))
-
-    # app.logger.info(f"Filtering sales for date range: {start_date} to {end_date}")
+    start_month = quarter_start_months[quarter]
+    start_date = datetime(year, start_month, 1)
+    # Half-open range so times on the quarter's last day are never excluded
+    if quarter == 'Q4':
+        end_date = datetime(year + 1, 1, 1)
+    else:
+        end_date = datetime(year, start_month + 3, 1)
 
     query = SalesReceipt.query.filter(
-        SalesReceipt.date.between(start_date, end_date)
+        SalesReceipt.date >= start_date,
+        SalesReceipt.date < end_date
     ).options(
         joinedload(SalesReceipt.customer),
         joinedload(SalesReceipt.line_items).joinedload(LineItem.product)
-    )
-
-    # Log the actual SQL query being generated
-    # app.logger.info(f"Generated SQL: {query.statement.compile(compile_kwargs={'literal_binds': True})}")
-
-     # Log the results count and dates
-    # results = query.all()
-    # app.logger.info(f"Found {len(results)} results")
-    # app.logger.info(f"Date range of results: {min(r.date for r in results)} to {max(r.date for r in results)}")
+    ).order_by(SalesReceipt.date, SalesReceipt.id)
 
     total_count = query.count()
-    sales = query.offset(start).limit(end - start).all()
+
+    # Pagination is optional; without start/end the whole quarter is returned
+    # so the report totals always cover every sale
+    if start is not None or end is not None:
+        start = start or 0
+        query = query.offset(start)
+        if end is not None:
+            query = query.limit(max(end - start, 0))
+    sales = query.all()
 
     data = []
     for sale in sales:
-        manufacturing = sum(item.total_price for item in sale.line_items if item.product.sku.endswith('A'))
+        manufacturing = sum(item.total_price for item in sale.line_items if item.product.is_manufactured)
         retail = sum(item.total_price for item in sale.line_items)
         items = format_items(sale.line_items)
 
@@ -726,7 +717,8 @@ def add_product():
     new_product = Product(
         sku=data['sku'],
         description=data['description'],
-        price=float(data['price'])  # The price is now a string without the $ sign
+        price=float(data['price']),  # The price is now a string without the $ sign
+        is_manufactured=bool(data.get('is_manufactured', False))
     )
     db.session.add(new_product)
     db.session.commit()
@@ -740,6 +732,7 @@ def edit_product(id):
     product.sku = data['sku']
     product.description = data['description']
     product.price = float(data['price'])  # The price is now a string without the $ sign
+    product.is_manufactured = bool(data.get('is_manufactured', product.is_manufactured))
     db.session.commit()
     return jsonify({'success': True})
 
@@ -751,7 +744,8 @@ def get_product(id):
         'id': product.id,
         'sku': product.sku,
         'description': product.description,
-        'price': float(product.price)  # Send the price as a float
+        'price': float(product.price),  # Send the price as a float
+        'is_manufactured': product.is_manufactured
     })
 
 @app.route('/products/delete/<int:id>', methods=['POST'])
@@ -778,7 +772,8 @@ def get_product_api(id):
         'id': product.id,
         'sku': product.sku,
         'description': product.description,
-        'price': float(product.price)
+        'price': float(product.price),
+        'is_manufactured': product.is_manufactured
     })
 
 @app.route('/sales')
@@ -1737,94 +1732,195 @@ def get_country_name(country_code):
     return country.name if country else country_code
 
 def get_state_name(state_code, country_code):
-    subdivisions = pycountry.subdivisions.get(country_code=country_code)
+    try:
+        subdivisions = pycountry.subdivisions.get(country_code=country_code) or []
+    except LookupError:
+        return state_code
     for subdivision in subdivisions:
         if subdivision.code.split('-')[-1] == state_code:
             return subdivision.name
     return state_code
 
+def _build_us_state_maps():
+    abbr_to_name = {
+        subdivision.code.split('-')[-1]: subdivision.name
+        for subdivision in pycountry.subdivisions.get(country_code='US')
+    }
+    # USPS military "states" are not ISO 3166-2 subdivisions
+    abbr_to_name.update({
+        'AA': 'Armed Forces Americas',
+        'AE': 'Armed Forces Europe',
+        'AP': 'Armed Forces Pacific',
+    })
+    name_to_abbr = {name.replace('.', '').upper(): abbr for abbr, name in abbr_to_name.items()}
+    return abbr_to_name, name_to_abbr
+
+# All 50 states plus DC, territories (PR, GU, VI, AS, MP, UM), and military mail codes
+US_STATE_ABBR_TO_NAME, US_STATE_NAME_TO_ABBR = _build_us_state_maps()
+
+# Common spellings that pycountry.countries.lookup() cannot resolve, mapped to alpha-2 codes
+COUNTRY_ALIASES = {
+    'UK': 'GB',
+    'GREAT BRITAIN': 'GB',
+    'ENGLAND': 'GB',
+    'SCOTLAND': 'GB',
+    'WALES': 'GB',
+    'NORTHERN IRELAND': 'GB',
+    'SOUTH KOREA': 'KR',
+    'KOREA': 'KR',
+    'NORTH KOREA': 'KP',
+    'RUSSIA': 'RU',
+    'VIETNAM': 'VN',
+    'LAOS': 'LA',
+    'SYRIA': 'SY',
+    'IVORY COAST': 'CI',
+    'CAPE VERDE': 'CV',
+    'BURMA': 'MM',
+    'MACEDONIA': 'MK',
+    'SWAZILAND': 'SZ',
+    'ST LUCIA': 'LC',
+    'ST KITTS AND NEVIS': 'KN',
+    'ST VINCENT AND THE GRENADINES': 'VC',
+    'THE NETHERLANDS': 'NL',
+    'HOLLAND': 'NL',
+    'UAE': 'AE',
+    'DRC': 'CD',
+}
+
+# Keep report labels the app has historically used where pycountry's primary name differs
+COUNTRY_DISPLAY_OVERRIDES = {
+    'CZ': 'Czech Republic',
+}
+
+def find_country(text):
+    """Resolve a country name or ISO code (any casing, with or without periods,
+    e.g. 'USA', 'U.S.A.', 'united kingdom', 'South Korea') to a pycountry country, or None."""
+    if not text:
+        return None
+    cleaned = text.replace('.', '').strip().strip(',').strip()
+    if not cleaned:
+        return None
+    upper = cleaned.upper()
+    # Bare two-letter US state abbreviations (CA, DE, IN, GA, ...) collide with
+    # ISO country codes; in this app they always mean the state
+    if upper in US_STATE_ABBR_TO_NAME:
+        return None
+    cleaned = COUNTRY_ALIASES.get(upper, cleaned)
+    try:
+        # Case-insensitive match on name, official name, common name, alpha-2/alpha-3
+        return pycountry.countries.lookup(cleaned)
+    except LookupError:
+        return None
+
+def country_display_name(country):
+    override = COUNTRY_DISPLAY_OVERRIDES.get(country.alpha_2)
+    if override:
+        return override
+    return getattr(country, 'common_name', country.name)
+
+def normalize_us_state(region):
+    """Return the USPS abbreviation for a US state/territory given either an
+    abbreviation ('wa', 'D.C.') or a full name ('Washington'), else None."""
+    if not region:
+        return None
+    cleaned = region.replace('.', '').strip().upper()
+    if cleaned in US_STATE_ABBR_TO_NAME:
+        return cleaned
+    return US_STATE_NAME_TO_ABBR.get(cleaned)
+
 def get_state_info(address):
-    #print(f"Processing address: {address}")  # Debug print
-    
-    address_parts = address.split('\n')
-    if len(address_parts) < 2:
-        #print("Address has fewer than 2 lines, returning 'Unknown'")  # Debug print
+    """Extract the state/country used for tax reporting from a shipping address:
+    'City, WA ZIP' for Washington, the USPS abbreviation for other US states,
+    or the country name for non-US addresses."""
+    if not address:
         return 'Unknown'
 
-    # Check if the last line is a country
-    potential_country = address_parts[-1].strip()
-    
-    # Special case for Czech Republic because pycountry expects Czechia
-    if potential_country == 'Czech Republic':
-        return 'Czech Republic'
+    lines = [line.strip() for line in address.split('\n') if line.strip()]
+    if not lines:
+        return 'Unknown'
 
-    country = pycountry.countries.get(name=potential_country)
-    if country:
-        #print(f"Non-US address detected, country: {country.name}")  # Debug print
-        return country.name
+    # Matches "City, Region" or "City, Region ZIP" where Region may be an
+    # abbreviation or a spelled-out state name
+    city_region_pattern = re.compile(
+        r'^(?P<city>.+),\s*(?P<region>[A-Za-z][A-Za-z. ]*?)[,\s]*(?P<zip>\d{5}(?:-\d{4})?)?$'
+    )
+    # Matches "City ST ZIP" with no comma ("Lebanon TN 37087"); the ZIP is
+    # required here so street lines ending in things like "Ave NE" can't match
+    no_comma_pattern = re.compile(
+        r'^(?P<city>.+?)\s+(?P<region>[A-Za-z]{2})[.,]?\s+(?P<zip>\d{5}(?:-\d{4})?)$'
+    )
 
-    # For US addresses, we need to handle both combined and split state/zip formats
-    for i in range(len(address_parts) - 1):
-        line = address_parts[i].strip()
-        us_state_pattern = r',\s*(\w{2})\s*$'  # Matches ", XX" at end of line
-        state_match = re.search(us_state_pattern, line)
-        
-        if state_match:
-            state = state_match.group(1)
-            # Check if next line contains a ZIP code
-            next_line = address_parts[i + 1].strip()
-            zip_pattern = r'^\d{5}(-\d{4})?$'
-            if re.match(zip_pattern, next_line):
-                if state == 'WA':
-                    # For Washington, return City, State, ZIP
-                    city_match = re.match(r'^(.+),', state_country_line)
-                    city = city_match.group(1) if city_match else 'Unknown City'
-                    zip_match = re.search(r'(\d{5}(-\d{4})?)$', state_country_line)
-                    zip_code = zip_match.group(1) if zip_match else 'Unknown ZIP'
-                    return f"{city}, WA {zip_code}"
-                return state
+    # Peel explicit country lines (no digits) off the end of the address.
+    # A US country line is dropped so the state can still be extracted.
+    is_us = False
+    while lines:
+        last = lines[-1]
+        if re.search(r'\d', last):
+            break
+        country = find_country(last)
+        if country is None:
+            break
+        if country.alpha_2 == 'US':
+            is_us = True
+            lines.pop()
+        else:
+            return country_display_name(country)
 
-    # For US addresses, the state info should be in the last line
-    state_country_line = address_parts[-1].strip()
-    #print(f"State/country line: {state_country_line}")  # Debug print
+    # Look for a US state, scanning from the bottom up. Handles "City, ST ZIP",
+    # "City, State Name ZIP", "City ST ZIP", a ZIP on its own following line,
+    # and truncated "City, ST" addresses (common for digital-goods orders).
+    for i in range(len(lines) - 1, -1, -1):
+        state = zip_code = city = None
+        was_abbrev = False
 
-    # US address pattern: City, State ZIP
-    us_pattern = r',\s*(\w{2})\s+\d{5}(-\d{4})?$'
-    us_match = re.search(us_pattern, state_country_line)
+        match = city_region_pattern.match(lines[i])
+        if match:
+            state = normalize_us_state(match.group('region'))
+            if state:
+                zip_code = match.group('zip')
+                city = match.group('city').strip()
+                was_abbrev = len(match.group('region').replace('.', '').strip()) == 2
 
-    if us_match:
-        state = us_match.group(1)
+        if not state:
+            match = no_comma_pattern.match(lines[i])
+            if match:
+                state = normalize_us_state(match.group('region'))
+                if state:
+                    zip_code = match.group('zip')
+                    city = match.group('city').strip()
+                    was_abbrev = True
+
+        if not state:
+            continue
+
+        if not zip_code and i + 1 < len(lines):
+            next_zip = re.fullmatch(r'\d{5}(?:-\d{4})?', lines[i + 1])
+            if next_zip:
+                zip_code = next_zip.group(0)
+
+        # A spelled-out region without a ZIP is ambiguous with country names
+        # ("Tbilisi, Georgia" must not become GA), so it needs an explicit
+        # United States line; a valid two-letter abbreviation is trusted as-is
+        # ("Fairview, TX")
+        if not zip_code and not is_us and not was_abbrev:
+            continue
+
         if state == 'WA':
-            # For Washington, return City, State, ZIP
-            city_match = re.match(r'^(.+),', state_country_line)
-            city = city_match.group(1) if city_match else 'Unknown City'
-            zip_match = re.search(r'(\d{5}(-\d{4})?)$', state_country_line)
-            zip_code = zip_match.group(1) if zip_match else 'Unknown ZIP'
-            result = f"{city}, WA {zip_code}"
-        else:
-            result = state
-    else:
-        # If it doesn't match US pattern, check each line for a country name
-        for line in reversed(address_parts):
-            country = pycountry.countries.get(name=line.strip())
-            if country:
-                result = country.name
-                break
+            if zip_code:
+                return f"{city}, WA {zip_code}"
+            return f"{city}, WA" if city else 'WA'
+        return state
 
-            # Try to find country name within the line
-            # This helps with lines like "Prague, Czech Republic"
-            words = line.split()
-            for i in range(len(words)):
-                for j in range(i + 1, len(words) + 1):
-                    potential_country = ' '.join(words[i:j])
-                    country = pycountry.countries.get(name=potential_country)
-                    if country:
-                        return country.name
-        else:
-            result = 'Unknown'
+    # No US state found — look for a country name inside the remaining lines,
+    # e.g. "Prague, Czech Republic" on a single line
+    for line in reversed(lines):
+        country = find_country(line)
+        if country is None and ',' in line:
+            country = find_country(line.rsplit(',', 1)[-1])
+        if country:
+            return country_display_name(country)
 
-    #print(f"Extracted result: {result}")  # Debug print
-    return result
+    return 'United States' if is_us else 'Unknown'
 
 def format_items(line_items):
     formatted_items = []
@@ -2074,7 +2170,9 @@ def get_or_create_product(shipstation_item, session):
                 product = Product(
                     sku=shipstation_item['sku'],
                     description=shipstation_item['name'],
-                    price=float(shipstation_item['unit_price'])
+                    price=float(shipstation_item['unit_price']),
+                    # Initial guess from the legacy SKU convention; editable on the products page
+                    is_manufactured=(shipstation_item['sku'] or '').endswith('A')
                 )
                 session.add(product)
                 session.flush()
@@ -2090,7 +2188,8 @@ def get_or_create_product(shipstation_item, session):
                             product = Product(
                                 sku=shipstation_item['sku'],
                                 description=shipstation_item['name'],
-                                price=float(shipstation_item['unit_price'])
+                                price=float(shipstation_item['unit_price']),
+                                is_manufactured=(shipstation_item['sku'] or '').endswith('A')
                             )
                             session.add(product)
                             session.flush()

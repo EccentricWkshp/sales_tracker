@@ -114,30 +114,19 @@
             yearSelect.appendChild(option);
         }
     
-        // Set default quarter based on current date
+        // Default to the most recently completed quarter (the one being filed)
         function setDefaultSelections() {
-            var currentDate = new Date();
-            var currentMonth = currentDate.getMonth();
-            var currentQuarter = Math.floor(currentMonth / 3);
+            var currentQuarter = Math.floor(new Date().getMonth() / 3);
             var previousQuarter = (currentQuarter - 1 + 4) % 4; // Ensure it's always 0-3
-            var previousYear = currentYear - 1;
-            var filterYear;
 
-            // Set the year to the previous year if we are in Q1
-            if (currentQuarter = 0) {
-                filterYear = previousYear;
-            } else {
-                filterYear = currentYear;
-            }
-            
-            yearSelect.value = filterYear;
+            // In Q1 the previous quarter is Q4 of last year
+            yearSelect.value = currentQuarter === 0 ? currentYear - 1 : currentYear;
             document.getElementById('quarterSelect').selectedIndex = previousQuarter;
         }
     
         setDefaultSelections();
     
         var gridOptions = {
-            domLayout: 'autoHeight',
             columnDefs: [
                 { 
                     headerName: 'Date', 
@@ -265,21 +254,30 @@
             var year = yearSelect.value;
             var quarter = document.getElementById('quarterSelect').value;
             
+            // No start/end parameters: the API returns the whole quarter so the
+            // grid and the tax totals always cover every sale
             var url = new URL('/api/state_taxes_data', window.location.origin);
             url.searchParams.append('year', year);
             url.searchParams.append('quarter', quarter);
-            // Remove start/end parameters since we're fetching all data
-            
+
             fetch(url)
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(body => {
+                            throw new Error(body.error || `Request failed (${response.status})`);
+                        });
+                    }
+                    return response.json();
+                })
                 .then(data => {
-                    console.log('Data received:', data);
                     gridApi.setGridOption('rowData', data.rows);
-                    console.log('Processing tax data...');
                     updateStatistics(data.rows);
                 })
                 .catch(error => {
                     console.error('Error fetching data:', error);
+                    gridApi.setGridOption('rowData', []);
+                    updateStatistics([]);
+                    alert('Failed to load sales data: ' + error.message);
                 });
         }
     
@@ -293,7 +291,8 @@
             let totalShippingOutsideWA = 0;
             let waSalesAmount = 0;
     
-            const waZipRegex = /^[^,]+, WA 9\d{4}(-\d{4})?$/;
+            // Matches "City, WA 98101", "City, WA" (no ZIP), or bare "WA"
+            const waZipRegex = /^([^,]+, )?WA( \d{5}(-\d{4})?)?$/;
     
             rows.forEach(function(row) {
                 totalRetail += row.retail;
