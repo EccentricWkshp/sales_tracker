@@ -3,7 +3,7 @@ import click
 from contextlib import contextmanager
 import csv
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask.cli import with_appcontext
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -181,17 +181,21 @@ class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sku = db.Column(db.String(20), unique=True, nullable=False)
     description = db.Column(db.String(200), nullable=False)
-    price = db.Column(db.Float, nullable=False)
+    price = db.Column(db.Numeric(10, 2), nullable=False)
     # Counts toward the WA B&O manufacturing classification on the state taxes report
     is_manufactured = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    # Archived products are hidden from new-sale dropdowns; products with sales
+    # history can only be archived, never deleted
+    archived = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
 
     def to_dict(self):
         return {
             'id': self.id,
             'sku': self.sku,
             'description': self.description,
-            'price': self.price,
-            'is_manufactured': self.is_manufactured
+            'price': float(self.price),
+            'is_manufactured': self.is_manufactured,
+            'archived': self.archived
         }
 
 class SalesReceipt(db.Model):
@@ -705,53 +709,81 @@ def get_customer_orders(id):
 @app.route('/products')
 @login_required
 def products():
-    products = Product.query.all()
-    company_info = CompanyInfo.get_info()
+    # The grid loads its data from /api/products
+    return render_template('products.html', company_info=CompanyInfo.get_info())
 
-    return render_template('products.html', products=products, company_info=company_info)
+def _parse_product_payload(data):
+    """Validate a product add/edit payload; returns (fields, error_message)."""
+    sku = (data.get('sku') or '').strip()
+    description = (data.get('description') or '').strip()
+    if not sku:
+        return None, 'SKU is required'
+    if len(sku) > 20:
+        return None, 'SKU must be 20 characters or fewer'
+    if not description:
+        return None, 'Description is required'
+    try:
+        price = Decimal(str(data.get('price', '')).replace('$', '').replace(',', '').strip())
+    except InvalidOperation:
+        return None, 'Price must be a number'
+    if price < 0:
+        return None, 'Price cannot be negative'
+    return {
+        'sku': sku,
+        'description': description,
+        'price': price,
+        'is_manufactured': bool(data.get('is_manufactured', False)),
+        'archived': bool(data.get('archived', False)),
+    }, None
 
 @app.route('/products/add', methods=['POST'])
 @login_required
 def add_product():
-    data = request.json
-    new_product = Product(
-        sku=data['sku'],
-        description=data['description'],
-        price=float(data['price']),  # The price is now a string without the $ sign
-        is_manufactured=bool(data.get('is_manufactured', False))
-    )
+    fields, error = _parse_product_payload(request.json or {})
+    if error:
+        return jsonify({'success': False, 'error': error}), 400
+    new_product = Product(**fields)
     db.session.add(new_product)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': f"A product with SKU '{fields['sku']}' already exists"}), 409
     return jsonify({'success': True, 'id': new_product.id})
 
 @app.route('/products/edit/<int:id>', methods=['POST'])
 @login_required
 def edit_product(id):
     product = Product.query.get_or_404(id)
-    data = request.json
-    product.sku = data['sku']
-    product.description = data['description']
-    product.price = float(data['price'])  # The price is now a string without the $ sign
-    product.is_manufactured = bool(data.get('is_manufactured', product.is_manufactured))
-    db.session.commit()
+    fields, error = _parse_product_payload(request.json or {})
+    if error:
+        return jsonify({'success': False, 'error': error}), 400
+    for key, value in fields.items():
+        setattr(product, key, value)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': f"A product with SKU '{fields['sku']}' already exists"}), 409
     return jsonify({'success': True})
 
-@app.route('/products/get/<int:id>')
+@app.route('/products/archive/<int:id>', methods=['POST'])
 @login_required
-def get_product(id):
+def archive_product(id):
     product = Product.query.get_or_404(id)
-    return jsonify({
-        'id': product.id,
-        'sku': product.sku,
-        'description': product.description,
-        'price': float(product.price),  # Send the price as a float
-        'is_manufactured': product.is_manufactured
-    })
+    product.archived = True
+    db.session.commit()
+    return jsonify({'success': True})
 
 @app.route('/products/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_product(id):
     product = Product.query.get_or_404(id)
+    if LineItem.query.filter_by(product_id=id).first():
+        return jsonify({
+            'success': False,
+            'error': 'This product is used on existing sales and cannot be deleted. Archive it instead.'
+        }), 409
     db.session.delete(product)
     db.session.commit()
     return jsonify({'success': True})
@@ -768,13 +800,7 @@ def get_products():
 @login_required
 def get_product_api(id):
     product = Product.query.get_or_404(id)
-    return jsonify({
-        'id': product.id,
-        'sku': product.sku,
-        'description': product.description,
-        'price': float(product.price),
-        'is_manufactured': product.is_manufactured
-    })
+    return jsonify(product.to_dict())
 
 @app.route('/sales')
 @login_required
@@ -783,7 +809,7 @@ def sales():
     sorted_sales = sorted(sales, key=lambda sale: sale.date, reverse=True)
     customers = Customer.query.all()
     sorted_customers = sorted(customers, key=lambda customer: customer.name, reverse=False)
-    products = Product.query.all()
+    products = Product.query.filter_by(archived=False).all()
     sorted_products = sorted(products, key=lambda product: product.sku, reverse=False)
     company_info = CompanyInfo.get_info()
 
@@ -919,8 +945,10 @@ def edit_sale(id):
     # For GET requests, render the edit form
     customers = Customer.query.all()
     sorted_customers = sorted(customers, key=lambda customer: customer.name, reverse=False)
-    products = Product.query.all()
-    sorted_products = sorted(products, key=lambda product: product.sku, reverse=False)
+    products = Product.query.filter_by(archived=False).all()
+    # Archived products already on this sale must stay selectable so its line items render
+    archived_in_use = [item.product for item in sale.line_items if item.product and item.product.archived]
+    sorted_products = sorted({*products, *archived_in_use}, key=lambda product: product.sku)
     company_info = CompanyInfo.get_info()
 
     return render_template('edit_sale.html', sale=sale, customers=sorted_customers, products=sorted_products, company_info=company_info)

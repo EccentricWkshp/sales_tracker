@@ -34,6 +34,12 @@
                     Manufactured in WA (counts toward B&amp;O manufacturing)
                 </label>
             </div>
+            <div class="form-group">
+                <label for="isArchived">
+                    <input type="checkbox" id="isArchived" name="archived">
+                    Archived (hidden from new-sale product lists)
+                </label>
+            </div>
             <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Product</button>
         </form>
     </div>
@@ -84,22 +90,19 @@
                 },
                 { headerName: 'SKU', field: 'sku', sortable: true, sort: 'asc', filter: true },
                 { headerName: 'Description', field: 'description', sortable: true, filter: true },
-                { headerName: 'Price', field: 'price', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
+                { headerName: 'Price', field: 'price',
+                    valueFormatter: p => '$' + p.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                    sortable: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
                 { headerName: 'Manufactured', field: 'is_manufactured', maxWidth: 140, sortable: true, filter: true,
                     cellRenderer: params => params.value ? '<i class="fas fa-check"></i>' : ''
+                },
+                { headerName: 'Archived', field: 'archived', maxWidth: 110, sortable: true, filter: true,
+                    cellRenderer: params => params.value ? '<i class="fas fa-archive"></i>' : ''
                 }
             ],
-            rowData: [
-                {% for product in products %}
-                {
-                    id: {{ product.id }},
-                    sku: '{{ product.sku|cleaned }}',
-                    description: '{{ product.description|cleaned }}',
-                    price: '{{ "%.2f"|format(product.price) }}',
-                    is_manufactured: {{ 'true' if product.is_manufactured else 'false' }}
-                },
-                {% endfor %}
-            ],
+            // Data is loaded from /api/products (see below), not embedded in the page
+            rowData: [],
+            getRowStyle: params => params.data && params.data.archived ? { opacity: '0.5' } : null,
             defaultColDef: {
                 flex: 1,
                 minWidth: 100,
@@ -114,17 +117,40 @@
 
         var gridDiv = document.querySelector('#productsGrid');
         gridApi = agGrid.createGrid(gridDiv, gridOptions);
+        refreshGrid('/api/products', gridApi);
     });
+
+    function serverError(xhr) {
+        return (xhr.responseJSON && xhr.responseJSON.error) || "Unexpected server error";
+    }
+
+    function archiveProduct(productId) {
+        $.ajax({
+            url: "/products/archive/" + productId,
+            method: "POST",
+            success: function() {
+                refreshGrid('/api/products', gridApi);
+            },
+            error: function(xhr) {
+                alert("Error archiving product: " + serverError(xhr));
+            }
+        });
+    }
 
     function deleteProduct(productId) {
         $.ajax({
             url: "/products/delete/" + productId,
             method: "POST",
-            success: function(response) {
-                if (response.success) {
-                    refreshGrid('/api/products', gridApi);
+            success: function() {
+                refreshGrid('/api/products', gridApi);
+            },
+            error: function(xhr) {
+                if (xhr.status === 409) {
+                    if (confirm(serverError(xhr) + "\n\nArchive it now?")) {
+                        archiveProduct(productId);
+                    }
                 } else {
-                    alert("Error deleting product");
+                    alert("Error deleting product: " + serverError(xhr));
                 }
             }
         });
@@ -133,12 +159,13 @@
     function editProduct(productId) {
         // Implement edit functionality (e.g., open modal)
         $("#modalTitle").text("Edit Product");
-        $.get("/products/get/" + productId, function(data) {
+        $.get("/api/product/" + productId, function(data) {
             $("#productId").val(data.id);
             $("#sku").val(data.sku);
             $("#description").val(data.description);
             $("#price").val(('$' + data.price.toFixed(2).replace(/\B(?=(?:\d{3})+(?!\d))/g, ',')));
             $("#isManufactured").prop("checked", data.is_manufactured);
+            $("#isArchived").prop("checked", data.archived);
             $("#productModal").show();
         });
     }
@@ -185,19 +212,16 @@
                     sku: $("#sku").val(),
                     description: $("#description").val(),
                     price: cleave.getRawValue(),
-                    is_manufactured: $("#isManufactured").prop("checked")
+                    is_manufactured: $("#isManufactured").prop("checked"),
+                    archived: $("#isArchived").prop("checked")
                 }),
                 contentType: "application/json",
-                success: function(response) {
-                    if (response.success) {
-                        modal.hide();
-                        setTimeout(function() {
-                            //location.reload();
-                            refreshGrid('/api/products', gridApi);
-                        }, 1500); // 3000 milliseconds = 3 seconds
-                    } else {
-                        alert("Error saving product");
-                    }
+                success: function() {
+                    modal.hide();
+                    refreshGrid('/api/products', gridApi);
+                },
+                error: function(xhr) {
+                    alert("Error saving product: " + serverError(xhr));
                 }
             });
         });
