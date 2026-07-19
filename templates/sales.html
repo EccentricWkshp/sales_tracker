@@ -19,7 +19,11 @@
             <input type="hidden" id="saleId" name="id">
             <div class="form-group">
                 <label for="date">Date</label>
-                <input type="date" id="date" name="date">
+                <input type="date" id="date" name="date" required>
+            </div>
+            <div class="form-group">
+                <label for="time">Time (optional)</label>
+                <input type="time" id="time" name="time">
             </div>
             <div class="form-group">
                 <label for="shipstation_order_id">Order #</label>
@@ -64,7 +68,7 @@
                 </div>
                 <div class="form-group">
                     <label for="tax">Tax</label>
-                    <input type="text" id="tax" name="tax">
+                    <input type="text" id="tax" name="tax" value="$0.00">
                 </div>
                 <div class="form-group">
                     <label for="shipping">Shipping</label>
@@ -323,6 +327,14 @@ $(document).ready(function() {
         $("#saleId").val("");
         $("#lineItems").empty();
         lineItemCount = 0;
+        // Default the date to today (local time); time is left blank
+        var now = new Date();
+        $("#date").val(now.getFullYear() + '-' +
+            String(now.getMonth() + 1).padStart(2, '0') + '-' +
+            String(now.getDate()).padStart(2, '0'));
+        $("#time").val("");
+        currencyInputs.shipping.setRawValue('0.00');
+        currencyInputs.tax.setRawValue('0.00');
         updateTotals();
         modal.show();
     });
@@ -385,7 +397,7 @@ $(document).ready(function() {
                 </div>
                 <div class="form-group">
                     <label for="price_${lineItemCount}">Price</label>
-                    <input type="text" id="price_${lineItemCount}" class="price" readonly>
+                    <input type="text" id="price_${lineItemCount}" class="price">
                 </div>
                 <div class="form-group">
                     <label for="total_${lineItemCount}">Total</label>
@@ -420,9 +432,15 @@ $(document).ready(function() {
         updateLineTotals($(`#lineItems .line-item`).last());
     }
 
+    // Parses "$1,234.56" (Cleave-formatted) as well as plain numbers
+    function parseMoney(value) {
+        return parseFloat(String(value || '').replace(/[^0-9.-]/g, '')) || 0;
+    }
+
     $(document).on('change', '.product-select', function() {
         var lineItem = $(this).closest('.line-item');
         var price = $(this).find(':selected').data('price');
+        // Pre-fill from the product's list price; still editable to override
         lineItem.find('.price').val(price);
         updateLineTotals(lineItem);
     });
@@ -431,18 +449,22 @@ $(document).ready(function() {
         updateLineTotals($(this).closest('.line-item'));
     });
 
+    $(document).on('input', '.price', function() {
+        updateLineTotals($(this).closest('.line-item'));
+    });
+
     $(document).on('click', '.remove-line-item', function() {
         $(this).closest('.line-item').remove();
         updateTotals();
     });
 
-    $("#shipping").on('input', function() {
+    $("#shipping, #tax").on('input', function() {
         updateTotals();
     });
 
     function updateLineTotals(lineItem) {
         var quantity = parseInt(lineItem.find('.quantity').val()) || 0;
-        var price = parseFloat(lineItem.find('.price').val().replace('$', '')) || 0;
+        var price = parseMoney(lineItem.find('.price').val());
         var total = quantity * price;
         lineItem.find('.line-total').val(total.toFixed(2));
         updateTotals();
@@ -451,24 +473,14 @@ $(document).ready(function() {
     function updateTotals() {
         var subtotal = 0;
         $('.line-total').each(function() {
-            subtotal += parseFloat($(this).val().replace('$', '')) || 0;
+            subtotal += parseMoney($(this).val());
         });
         currencyInputs.subtotal.setRawValue(subtotal.toFixed(2));
 
+        // Tax and shipping are entered manually; the total just reflects them
         var shipping = parseFloat(currencyInputs.shipping.getRawValue()) || 0;
-
-        $.ajax({
-            url: '/api/calculate_tax',
-            method: 'POST',
-            contentType: 'application/json',
-            data: JSON.stringify({ total: subtotal }),
-            success: function(data) {
-                var tax = data.tax;
-                currencyInputs.tax.setRawValue(tax.toFixed(2));
-                var total = subtotal + tax + shipping;
-                currencyInputs.total.setRawValue(total.toFixed(2));
-            }
-        });
+        var tax = parseFloat(currencyInputs.tax.getRawValue()) || 0;
+        currencyInputs.total.setRawValue((subtotal + tax + shipping).toFixed(2));
     }
 
     form.submit(function(e) {
@@ -490,6 +502,7 @@ $(document).ready(function() {
             data: JSON.stringify({
                 customer_id: $("#customer").val(),
                 date: $("#date").val(),
+                time: $("#time").val(),
                 shipservice: $("#shipservice").val(),
                 shipdate: $("#shipdate").val(),
                 tracking: $("#tracking").val(),
@@ -503,17 +516,14 @@ $(document).ready(function() {
                 shipstation_order_id: $("#shipstation_order_id").val(),
             }),
             contentType: "application/json",
-            success: function(response) {
-                if (response.success) {
-                    $('#customer').prop('disabled', false);
-                    modal.hide();
-                    //location.reload();
-                    setTimeout(function() {
-                        refreshGrid('/api/sales', gridApi);
-                    }, 1500); // 1500 milliseconds = 1.5 seconds
-                } else {
-                    alert("Error saving sale");
-                }
+            success: function() {
+                $('#customer').prop('disabled', false);
+                modal.hide();
+                refreshGrid('/api/sales', gridApi);
+            },
+            error: function(xhr) {
+                var message = (xhr.responseJSON && xhr.responseJSON.error) || "Unexpected server error";
+                alert("Error saving sale: " + message);
             }
         });
     });

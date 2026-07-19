@@ -815,40 +815,87 @@ def sales():
 
     return render_template('sales.html', sales=sorted_sales, customers=sorted_customers, products=sorted_products, company_info=company_info)
 
+def _parse_money(value, field):
+    """Parse a currency amount from the client ('$1,234.56', '', None)."""
+    cleaned = str(value if value is not None else '').replace('$', '').replace(',', '').strip()
+    try:
+        amount = Decimal(cleaned or '0')
+    except InvalidOperation:
+        raise ValueError(f'{field} must be a number')
+    if amount < 0:
+        raise ValueError(f'{field} cannot be negative')
+    return amount
+
 @app.route('/sales/add', methods=['POST'])
 @login_required
 def add_sale():
-    data = request.json
+    data = request.json or {}
+
+    try:
+        if not data.get('customer_id'):
+            raise ValueError('Customer is required')
+        customer_id = int(data['customer_id'])
+
+        if not data.get('date'):
+            raise ValueError('Date is required')
+        # Time is optional; fromisoformat accepts both "HH:MM" and "HH:MM:SS"
+        time_str = (data.get('time') or '').strip()
+        try:
+            sale_date = datetime.fromisoformat(
+                f"{data['date']}T{time_str}" if time_str else data['date'])
+        except ValueError:
+            raise ValueError('Invalid date/time')
+
+        shipdate = datetime.strptime(data['shipdate'], '%Y-%m-%d').date() if data.get('shipdate') else None
+
+        tax = _parse_money(data.get('tax'), 'Tax')
+        shipping = _parse_money(data.get('shipping'), 'Shipping')
+
+        if not data.get('line_items'):
+            raise ValueError('At least one product is required')
+        parsed_items = []
+        subtotal = Decimal('0')
+        for item in data['line_items']:
+            if not item.get('product_id'):
+                raise ValueError('Each line item needs a product selected')
+            quantity = int(item.get('quantity') or 0)
+            if quantity < 1:
+                raise ValueError('Quantity must be at least 1')
+            price_each = _parse_money(item.get('price_each'), 'Price')
+            total_price = price_each * quantity
+            subtotal += total_price
+            parsed_items.append((int(item['product_id']), quantity, price_each, total_price))
+    except (ValueError, TypeError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
 
     new_sale = SalesReceipt(
-        customer_id=data['customer_id'],
-        shipservice=data.get('shipservice', None),
-        tracking=data.get('tracking', None),
-        shipdate=datetime.strptime(data['shipdate'], '%Y-%m-%d').date() if data.get('shipdate') else None,
-        date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
-        total=float(data['total']),
-        tax=float(data['tax']),
-        shipping=float(data['shipping']),
+        customer_id=customer_id,
+        shipservice=data.get('shipservice') or None,
+        tracking=data.get('tracking') or None,
+        shipdate=shipdate,
+        date=sale_date,
+        # Computed here so the stored total always equals line items + tax + shipping
+        total=subtotal + tax + shipping,
+        tax=tax,
+        shipping=shipping,
         customer_notes=data.get('customer_notes', ''),
         internal_notes=data.get('internal_notes', ''),
         shipstation_order_id=data.get('shipstation_order_id', '')
     )
     db.session.add(new_sale)
     db.session.flush()
-    
+
     # This assigns an ID to new_sale
-    #new_sale.shipstation_order_id = new_sale.id
     new_sale.order_number = new_sale.id
 
-    for item in data['line_items']:
-        line_item = LineItem(
+    for product_id, quantity, price_each, total_price in parsed_items:
+        db.session.add(LineItem(
             receipt_id=new_sale.id,
-            product_id=item['product_id'],
-            quantity=int(item['quantity']),
-            price_each=float(item['price_each']),
-            total_price=float(item['total_price'])
-        )
-        db.session.add(line_item)
+            product_id=product_id,
+            quantity=quantity,
+            price_each=price_each,
+            total_price=total_price
+        ))
 
     db.session.commit()
     return jsonify({'success': True, 'id': new_sale.id})
