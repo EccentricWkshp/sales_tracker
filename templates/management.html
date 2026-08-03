@@ -3,19 +3,52 @@
 
 {% block title %}Management{% endblock %}
 
+{#
+  Saved API keys and secrets are deliberately NOT rendered into this page.
+  Anyone who could view-source (or a cached page, or a shoulder-surfer) could
+  read every integration credential. Fields render empty with a "saved" hint,
+  and the server treats a blank submission as "leave unchanged".
+#}
+{% macro secret_field(id, name, label, saved, hint='', from_env=False) %}
+<div class="form-group">
+    <label for="{{ id }}">{{ label }}
+        {% if from_env %}<span class="badge badge-success">from environment</span>
+        {% elif saved %}<span class="badge badge-success">saved</span>
+        {% else %}<span class="badge badge-muted">not set</span>{% endif %}
+    </label>
+    <input type="password" id="{{ id }}" name="{{ name }}" class="form-control"
+           autocomplete="new-password"
+           placeholder="{{ '•••••••• (leave blank to keep)' if saved else 'Not set' }}">
+    {% if from_env %}
+        <p class="form-hint">An environment variable is supplying this value and takes
+           precedence — anything entered here is stored but not used.</p>
+    {% endif %}
+    {% if hint %}<p class="form-hint">{{ hint }}</p>{% endif %}
+</div>
+{% endmacro %}
+
 {% block content %}
-<div class="container">
-    <h1>Management Interface</h1>
-    <form method="POST" enctype="multipart/form-data">
-        <button type="submit" class="btn btn-primary">Save Settings</button>
-        <h2>Company Information</h2>
+<div class="page-header">
+    <div>
+        <h1>Management</h1>
+        <p class="page-subtitle">Company details and order-source integrations.</p>
+    </div>
+</div>
+
+<form method="POST" enctype="multipart/form-data">
+    <div class="toolbar">
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Settings</button>
+    </div>
+
+    <fieldset>
+        <legend>Company Information</legend>
         <div class="form-group">
             <label for="name">Company Name</label>
             <input type="text" id="name" name="name" class="form-control" value="{{ company_info.name if company_info else '' }}">
         </div>
         <div class="form-group">
             <label for="address">Address</label>
-            <textarea id="address" name="address" class="form-control">{{ company_info.address if company_info else '' }}</textarea>
+            <textarea id="address" name="address" rows="3" class="form-control">{{ company_info.address if company_info else '' }}</textarea>
         </div>
         <div class="form-group">
             <label for="phone">Phone</label>
@@ -27,54 +60,153 @@
         </div>
         <div class="form-group">
             <label for="logo">Logo</label>
-            <input type="file" id="logo" name="logo" class="form-control-file">
+            <input type="file" id="logo" name="logo" class="form-control-file" accept=".png,.jpg,.jpeg,.gif">
             {% if company_info and company_info.logo %}
-                <img src="{{ company_info.logo }}" alt="Company Logo" style="max-width: 200px; margin-top: 10px;">
+                <img src="{{ company_info.logo }}" alt="Company Logo" style="max-width: 200px; margin-top: 10px; border-radius: var(--radius-sm);">
             {% endif %}
         </div>
+    </fieldset>
 
-        <h2>Shippo Settings</h2>
+    <fieldset>
+        <legend><i class="fab fa-shopify"></i> Shopify</legend>
+        <div class="form-group form-check">
+            <input type="checkbox" class="form-check-input" id="shopify_enabled" name="shopify_enabled"
+                   {% if shopify_credentials and shopify_credentials.enabled %}checked{% endif %}>
+            <label class="form-check-label" for="shopify_enabled">Enable Shopify integration</label>
+        </div>
         <div class="form-group">
-            <input type="checkbox" class="form-check-input" id="shippo_enabled" name="shippo_enabled" 
+            <label for="shopify_shop_domain">Store Domain
+                {% if shopify_from_env and shopify_from_env.shop_domain %}
+                    <span class="badge badge-success">from environment</span>
+                {% endif %}
+            </label>
+            <input type="text" id="shopify_shop_domain" name="shopify_shop_domain" class="form-control"
+                   placeholder="your-store.myshopify.com"
+                   value="{{ shopify_credentials.shop_domain if shopify_credentials else '' }}">
+            <p class="form-hint">
+                The <code>.myshopify.com</code> host, not your customer-facing domain.
+                {% if shopify_shop_domain %}Resolving to <code>{{ shopify_shop_domain }}</code>.{% endif %}
+            </p>
+        </div>
+
+        <div class="form-group">
+            <label for="shopify_auth_mode">Authentication Route</label>
+            <select id="shopify_auth_mode" name="shopify_auth_mode" class="form-control">
+                <option value="token" {% if shopify_auth_mode == 'token' %}selected{% endif %}>
+                    Legacy custom app — Admin API access token
+                </option>
+                <option value="client_credentials" {% if shopify_auth_mode == 'client_credentials' %}selected{% endif %}>
+                    Dev Dashboard app — client ID and secret
+                </option>
+            </select>
+            <p class="form-hint">
+                Shopify offers both. The legacy route uses a long-lived
+                <code>shpat_</code> token; the Dev Dashboard route exchanges a client ID
+                and secret for a fresh 24-hour token automatically. Fill in only the
+                pair for the route you pick.
+            </p>
+        </div>
+
+        <div id="shopifyTokenFields">
+            {{ secret_field('shopify_api_key', 'shopify_api_key', 'Admin API Access Token',
+                            shopify_credentials and shopify_credentials.api_key,
+                            'From your custom app in Shopify admin — begins with shpat_.',
+                            shopify_from_env and shopify_from_env.api_key) }}
+            {{ secret_field('shopify_api_secret', 'shopify_api_secret', 'API Secret Key',
+                            shopify_credentials and shopify_credentials.api_secret,
+                            'Only needed for webhooks — it signs every inbound request.',
+                            shopify_from_env and shopify_from_env.api_secret) }}
+        </div>
+
+        <div id="shopifyClientFields">
+            {{ secret_field('shopify_client_id', 'shopify_client_id', 'Client ID',
+                            shopify_credentials and shopify_credentials.client_id,
+                            'From the app’s Dev Dashboard overview.',
+                            shopify_from_env and shopify_from_env.client_id) }}
+            {{ secret_field('shopify_client_secret', 'shopify_client_secret', 'Client Secret',
+                            shopify_credentials and shopify_credentials.client_secret,
+                            'Exchanged for a 24-hour access token, and signs webhooks on this route.',
+                            shopify_from_env and shopify_from_env.client_secret) }}
+            <p class="form-hint">
+                {% if shopify_token_expires_at %}
+                    Current access token valid until {{ shopify_token_expires_at.strftime('%Y-%m-%d %H:%M') }};
+                    it is renewed automatically before it expires.
+                {% else %}
+                    No access token cached yet — one is requested on the first fetch.
+                {% endif %}
+            </p>
+        </div>
+        <div class="form-group form-check">
+            <input type="checkbox" class="form-check-input" id="shopify_webhooks_enabled" name="shopify_webhooks_enabled"
+                   {% if shopify_credentials and shopify_credentials.webhooks_enabled %}checked{% endif %}>
+            <label class="form-check-label" for="shopify_webhooks_enabled">Accept inbound webhooks</label>
+        </div>
+        <p class="form-hint">
+            Webhook endpoint: <code>{{ webhook_url }}</code><br>
+            Shopify must be able to reach this URL over HTTPS from the internet. While this
+            box is only on the LAN, leave webhooks off and use the dashboard's date-range
+            fetch instead. Requests without a valid signature are rejected, and the endpoint
+            returns 404 entirely while this is unchecked.
+        </p>
+    </fieldset>
+
+    <fieldset>
+        <legend>Shippo</legend>
+        <div class="form-group form-check">
+            <input type="checkbox" class="form-check-input" id="shippo_enabled" name="shippo_enabled"
                    {% if shippo_credentials and shippo_credentials.enabled %}checked{% endif %}>
-            <label class="form-check-label" for="shippo_enabled">Enable Shippo Integration</label>
+            <label class="form-check-label" for="shippo_enabled">Enable Shippo integration</label>
         </div>
-        <div class="form-group">
-            <label for="shippo_api_key">API Key</label>
-            <input type="text" id="shippo_api_key" name="shippo_api_key" class="form-control" value="{{ shippo_credentials.api_key if shippo_credentials else '' }}">
-        </div>
-        
-        <h2>ShipStation Settings</h2>
-        <div class="form-group">
-            <input type="checkbox" class="form-check-input" id="ss_enabled" name="ss_enabled" 
+        {{ secret_field('shippo_api_key', 'shippo_api_key', 'API Key',
+                        shippo_credentials and shippo_credentials.api_key) }}
+    </fieldset>
+
+    <fieldset>
+        <legend>ShipStation</legend>
+        <div class="form-group form-check">
+            <input type="checkbox" class="form-check-input" id="ss_enabled" name="ss_enabled"
                    {% if shipstation_credentials and shipstation_credentials.enabled %}checked{% endif %}>
-            <label class="form-check-label" for="ss_enabled">Enable ShipStation Integration</label>
+            <label class="form-check-label" for="ss_enabled">Enable ShipStation integration</label>
         </div>
-        <div class="form-group">
-            <label for="ss_api_key">API Key</label>
-            <input type="text" id="ss_api_key" name="ss_api_key" class="form-control" value="{{ shipstation_credentials.api_key if shipstation_credentials else '' }}">
-        </div>
-        <div class="form-group">
-            <label for="ss_api_secret">API Secret</label>
-            <input type="password" id="ss_api_secret" name="ss_api_secret" class="form-control" value="{{ shipstation_credentials.api_secret if shipstation_credentials else '' }}">
-        </div>
+        {{ secret_field('ss_api_key', 'ss_api_key', 'API Key',
+                        shipstation_credentials and shipstation_credentials.api_key) }}
+        {{ secret_field('ss_api_secret', 'ss_api_secret', 'API Secret',
+                        shipstation_credentials and shipstation_credentials.api_secret) }}
+    </fieldset>
 
-        <h2>WooCommerce Settings</h2>
-        <div class="form-group">
-            <input type="checkbox" class="form-check-input" id="wc_enabled" name="wc_enabled" 
+    <fieldset>
+        <legend>WooCommerce</legend>
+        <div class="form-group form-check">
+            <input type="checkbox" class="form-check-input" id="wc_enabled" name="wc_enabled"
                    {% if woocommerce_credentials and woocommerce_credentials.enabled %}checked{% endif %}>
-            <label class="form-check-label" for="wc_enabled">Enable WooCommerce Integration</label>
+            <label class="form-check-label" for="wc_enabled">Enable WooCommerce integration</label>
         </div>
-        <div class="form-group">
-            <label for="wc_api_key">API Key</label>
-            <input type="text" id="wc_api_key" name="wc_api_key" class="form-control" value="{{ woocommerce_credentials.api_key if woocommerce_credentials else '' }}">
-        </div>
-        <div class="form-group">
-            <label for="wc_api_secret">API Secret</label>
-            <input type="password" id="wc_api_secret" name="wc_api_secret" class="form-control" value="{{ woocommerce_credentials.api_secret if woocommerce_credentials else '' }}">
-        </div>
+        {{ secret_field('wc_api_key', 'wc_api_key', 'API Key',
+                        woocommerce_credentials and woocommerce_credentials.api_key) }}
+        {{ secret_field('wc_api_secret', 'wc_api_secret', 'API Secret',
+                        woocommerce_credentials and woocommerce_credentials.api_secret) }}
+        <p class="form-hint">The WooCommerce importer has not been built yet — enabling this
+           shows the dashboard card, but fetching reports that it is unavailable.</p>
+    </fieldset>
 
-        <button type="submit" class="btn btn-primary">Save Settings</button>
-    </form>
-</div>
+    <div class="actions">
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Settings</button>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// Show only the credential pair the selected Shopify auth route actually uses.
+// Both stay in the DOM so switching back does not lose an unsaved entry.
+$(document).ready(function() {
+    function syncShopifyAuthFields() {
+        var mode = $('#shopify_auth_mode').val();
+        $('#shopifyTokenFields').toggle(mode === 'token');
+        $('#shopifyClientFields').toggle(mode === 'client_credentials');
+    }
+    $('#shopify_auth_mode').change(syncShopifyAuthFields);
+    syncShopifyAuthFields();
+});
+</script>
 {% endblock %}

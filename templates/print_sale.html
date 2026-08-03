@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Invoice #{{ sale.shipstation_order_id }} - {{ company_info.name }}</title>
+    <title>Invoice #{{ sale.receipt_number or sale.id }} - {{ company_info.name }}</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -89,8 +89,7 @@
         </div>
         <div>
             <strong>Invoice #:</strong> {{ sale.id }}<br>
-            <!-- <strong>Receipt #:</strong> {{ sale.order_number }}<br> -->
-            {% if sale.shipstation_order_id %}<strong>Order #: </strong>  {{ sale.shipstation_order_id }}<br>{% endif %}
+            {% if sale.external_order_number %}<strong>Order #: </strong>  {{ sale.external_order_number }}<br>{% endif %}
             <strong>Date:</strong> {{ sale.date.strftime('%B %d, %Y') }}
         </div>
     </div>

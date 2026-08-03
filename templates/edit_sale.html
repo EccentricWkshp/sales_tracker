@@ -8,7 +8,7 @@
         <h1 class="invoice-title">Edit Sales Receipt #{{ sale.id }}</h1>
         <div class="invoice-details">
             <p><strong>Date:</strong> {{ sale.date.strftime('%m-%d-%Y') }}</p>
-            <p><strong>Order ID:</strong> {{ sale.shipstation_order_id }}</p>
+            <p><strong>Order #:</strong> {{ sale.external_order_number }}</p>
         </div>
     </div>
     
@@ -18,8 +18,8 @@
             <input type="datetime-local" id="date" name="date" value="{{ sale.date.strftime('%Y-%m-%dT%H:%M') }}" required>
         </div>
         <div class="form-group">
-            <label for="shipstation_order_id">Order ID:</label>
-            <input type="text" id="shipstation_order_id" name="shipstation_order_id" value="{{ sale.shipstation_order_id if sale.shipstation_order_id else '' }}">
+            <label for="external_order_number">Order # (from the selling platform)</label>
+            <input type="text" id="external_order_number" name="external_order_number" value="{{ sale.external_order_number or '' }}">
         </div>
         <div class="customer-info">
             <div class="form-group">

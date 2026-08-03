@@ -9,89 +9,91 @@
         <h1 class="invoice-title">Sales Receipt #{{ sale.id }}</h1>
         <div class="invoice-details">
             <p><strong>Date:</strong> {{ sale.date.strftime('%m-%d-%Y') }}</p>
-            <p><strong>Order ID:</strong> {{ sale.shipstation_order_id }}</p>
-            <p><strong>Order #:</strong> {{ sale.order_number }}</p>
+            {% if sale.external_order_number %}<p><strong>Order #:</strong> {{ sale.external_order_number }}</p>{% endif %}
+            {% if sale.receipt_number %}<p><strong>Receipt #:</strong> {{ sale.receipt_number }}</p>{% endif %}
+            {% if sale.source %}<p><span class="badge">{{ sale.source }}</span></p>{% endif %}
         </div>
     </div>
-    
+
     <div class="customer-info">
         <div class="customer-details">
             <h3>Customer Information</h3>
             {% if sale.customer.company %}<p><strong>Company:</strong> {{ sale.customer.company }}</p>{% endif %}
-            <p><strong>Name:</strong> <a href="{{ url_for('view_customer', id=sale.customer.id) }}"> {{ sale.customer.name }} </a></p>
-            <p><strong>Email:</strong> <a href="mailto: {{ sale.customer.email }}"> {{ sale.customer.email }} </a></p>
+            <p><strong>Name:</strong> <a href="{{ url_for('view_customer', id=sale.customer.id) }}">{{ sale.customer.name }}</a></p>
+            {% if not sale.customer.email.startswith('placeholder_') %}
+            <p><strong>Email:</strong> <a href="mailto:{{ sale.customer.email }}">{{ sale.customer.email }}</a></p>
+            {% endif %}
+            {% if sale.customer.phone %}<p><strong>Phone:</strong> {{ sale.customer.phone }}</p>{% endif %}
         </div>
     </div>
-    
+
     <div class="customer-info">
         <div class="billing-address">
             <h3>Billing Address</h3>
-            <p><a href="https://www.google.com/maps/place/{{ sale.customer.billing_address | nl2br }}" target="_blank">{{ sale.customer.billing_address | nl2br }}</a></p>
+            <p><a href="https://www.google.com/maps/search/?api=1&amp;query={{ sale.customer.billing_address | maps_query }}" target="_blank" rel="noopener">{{ sale.customer.billing_address | nl2br }}</a></p>
         </div>
         <div class="shipping-address">
             <h3>Shipping Address</h3>
-            <p><a href="https://www.google.com/maps/place/{{ sale.customer.shipping_address | nl2br }}" target="_blank">{{ sale.customer.shipping_address | nl2br }}</a></p>
+            <p><a href="https://www.google.com/maps/search/?api=1&amp;query={{ sale.customer.shipping_address | maps_query }}" target="_blank" rel="noopener">{{ sale.customer.shipping_address | nl2br }}</a></p>
         </div>
     </div>
 
     <div class="shipping-info">
         <div class="shipservice">
             <h3>Shipping</h3>
-            <p>{{ sale.shipservice if sale.shipservice else '' }}</p>
+            <p>{{ sale.shipservice if sale.shipservice else '—' }}</p>
         </div>
         <div class="shipdate">
             <h3>Ship Date</h3>
-            <p>{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}</p>
+            <p>{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '—' }}</p>
         </div>
         <div class="tracking">
             <h3>Tracking</h3>
-            <!-- <p>{{ sale.tracking if sale.tracking else '' }}</p> -->
             {% if sale.tracking %}
-                {% if sale.shipservice %}
-                    {% if sale.shipservice.upper() == 'USPS' %}
-                        <p><a href="https://tools.usps.com/go/TrackConfirmAction?qtc_tLabels1={{ sale.tracking }}" target="_blank">{{ sale.tracking }}</a></p>
-                    {% elif sale.shipservice.upper() == 'UPS' %}
-                        <p><a href="https://wwwapps.ups.com/WebTracking/track?track=yes&trackNums={{ sale.tracking }}" target="_blank">{{ sale.tracking }}</a></p>
-                    {% elif sale.shipservice.upper() == 'DHL' %}
-                        <p><a href="https://www.dhl.com/en/express/tracking.html?AWB={{ sale.tracking }}" target="_blank">{{ sale.tracking }}</a></p>
-                    {% elif sale.shipservice.upper() == 'FEDEX' %}
-                        <p><a href="https://www.fedex.com/apps/fedextrack/?tracknumbers={{ sale.tracking }}" target="_blank">{{ sale.tracking }}</a></p>
-                    {% else %}
-                        <p>{{ sale.tracking }}</p>
-                    {% endif %}
+                {% set carrier = (sale.shipservice or '').upper() %}
+                {% if carrier == 'USPS' %}
+                    <p><a href="https://tools.usps.com/go/TrackConfirmAction?qtc_tLabels1={{ sale.tracking | urlencode }}" target="_blank" rel="noopener">{{ sale.tracking }}</a></p>
+                {% elif carrier == 'UPS' %}
+                    <p><a href="https://wwwapps.ups.com/WebTracking/track?track=yes&amp;trackNums={{ sale.tracking | urlencode }}" target="_blank" rel="noopener">{{ sale.tracking }}</a></p>
+                {% elif carrier == 'DHL' %}
+                    <p><a href="https://www.dhl.com/en/express/tracking.html?AWB={{ sale.tracking | urlencode }}" target="_blank" rel="noopener">{{ sale.tracking }}</a></p>
+                {% elif carrier == 'FEDEX' %}
+                    <p><a href="https://www.fedex.com/apps/fedextrack/?tracknumbers={{ sale.tracking | urlencode }}" target="_blank" rel="noopener">{{ sale.tracking }}</a></p>
                 {% else %}
                     <p>{{ sale.tracking }}</p>
                 {% endif %}
             {% else %}
-                <p></p>
+                <p>—</p>
             {% endif %}
         </div>
     </div>
 
     <div class="line-items">
         <h3>Line Items</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>SKU</th>
-                    <th>Product</th>
-                    <th>Quantity</th>
-                    <th>Price Each</th>
-                    <th>Total</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in sale.line_items %}
-                <tr>
-                    <td>{{ item.product.sku }}</td>
-                    <td>{{ item.product.description }}</td>
-                    <td>{{ item.quantity }}</td>
-                    <td>${{ "%.2f"|format(item.price_each) }}</td>
-                    <td>${{ "%.2f"|format(item.total_price) }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+        <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>SKU</th>
+                        <th>Product</th>
+                        <th>Quantity</th>
+                        <th>Price Each</th>
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in sale.line_items %}
+                    <tr>
+                        <td>{{ item.product.sku }}</td>
+                        <td>{{ item.product.description }}</td>
+                        <td>{{ item.quantity }}</td>
+                        <td>${{ "%.2f"|format(item.price_each) }}</td>
+                        <td>${{ "%.2f"|format(item.total_price) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <div class="sale-summary">
@@ -127,13 +129,44 @@
                 <td>${{ "%.2f"|format(sale.total) }}</td>
             </tr>
         </table>
-    </div>    
+    </div>
 
     <div class="actions">
-        <a href="{{ url_for('edit_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit Sale</a>
-        <a href="{{ url_for('print_sale', id=sale.id) }}" target="_blank" class="btn btn-primary"><i class="fas fa-print"></i> Print</a>
         <a href="{{ url_for('sales') }}" class="btn btn-secondary"><i class="fas fa-arrow-left"></i> Back to Sales</a>
-        <a href="{{ url_for('update_shipment', id=sale.id) }}" class="btn btn-secondary"><i class="fas fa-sync"></i> Update from SS</a>
+        {% if shipstation_enabled %}
+        <button type="button" id="updateFromShipStation" class="btn btn-secondary"
+                data-sale-id="{{ sale.id }}"><i class="fas fa-sync"></i> Update from ShipStation</button>
+        {% endif %}
+        <a href="{{ url_for('print_sale', id=sale.id) }}" target="_blank" rel="noopener" class="btn btn-secondary"><i class="fas fa-print"></i> Print</a>
+        <a href="{{ url_for('edit_sale', id=sale.id) }}" class="btn btn-primary"><i class="fas fa-edit"></i> Edit Sale</a>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// "Update from ShipStation" writes to the database, so it is a POST triggered by
+// a button — not an <a href> a browser or prefetcher could follow on its own.
+$(document).ready(function() {
+    $('#updateFromShipStation').click(function() {
+        var $button = $(this);
+        var saleId = $button.data('sale-id');
+        var original = $button.html();
+        $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Updating…');
+
+        $.ajax({
+            url: '/shipstation/update_shipment/' + saleId,
+            method: 'POST',
+            success: function(response) {
+                showFlashMessage(response.message || 'Updated from ShipStation.', 'success');
+                setTimeout(function() { location.reload(); }, 900);
+            },
+            error: function(xhr) {
+                showFlashMessage(serverMessage(xhr, 'Could not update from ShipStation'), 'error');
+                $button.prop('disabled', false).html(original);
+            }
+        });
+    });
+});
+</script>
 {% endblock %}

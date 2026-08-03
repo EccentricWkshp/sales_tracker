@@ -5,317 +5,285 @@
 
 {% block content %}
 <div class="dashboard">
-    <h1>Sales Dashboard</h1>
-    
+    <div class="page-header">
+        <div>
+            <h1>Sales Dashboard</h1>
+            <p class="page-subtitle">Overview of sales activity and order imports.</p>
+        </div>
+    </div>
+
     <div class="summary-cards">
         <div class="card">
             <h2>Total Revenue</h2>
             <p class="large-number">${{ "{:,.2f}".format(total_revenue) }}</p>
+            <p class="card-note">All sales, including tax and shipping.</p>
         </div>
         <div class="card">
             <h2>Total Sales</h2>
-            <p class="large-number">{{ total_sales }}</p>
+            <p class="large-number">{{ "{:,}".format(total_sales) }}</p>
+            <p class="card-note">Sales receipts on file.</p>
         </div>
         <div class="card">
             <h2>Total Customers</h2>
-            <p class="large-number">{{ total_customers }}</p>
+            <p class="large-number">{{ "{:,}".format(total_customers) }}</p>
+            <p class="card-note">Unique customer records.</p>
         </div>
     </div>
-    
-    {% if shippo_enabled or shipstation_enabled or woocommerce_enabled %}
+
+    {% if pending_order_count %}
+    <div class="alert alert-warning mb-4">
+        <strong>{{ pending_order_count }} imported order{{ '' if pending_order_count == 1 else 's' }}
+        {{ 'is' if pending_order_count == 1 else 'are' }} waiting for customer details.</strong>
+        The store withheld the buyer's name, email and address, so
+        {{ 'it has' if pending_order_count == 1 else 'they have' }} not been turned into
+        {{ 'a sale' if pending_order_count == 1 else 'sales' }} yet and
+        {{ 'does' if pending_order_count == 1 else 'do' }} not count toward any total.
+        <a href="{{ url_for('pending_orders') }}">Complete
+        {{ 'it' if pending_order_count == 1 else 'them' }} now</a>.
+    </div>
+    {% endif %}
+
+    {% if shippo_enabled or shipstation_enabled or woocommerce_enabled or shopify_enabled %}
+    <h2>Import Orders</h2>
     <div class="integrations-container">
+        {% if shopify_enabled %}
+        <div class="integration-section">
+            <h2><i class="fab fa-shopify"></i> Shopify</h2>
+            <form id="shopifyForm">
+                <div class="form-container">
+                    <div class="form-group">
+                        <label for="shopify_start_date">Start Date</label>
+                        <input type="date" id="shopify_start_date" name="start_date" class="form-control" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="shopify_end_date">End Date</label>
+                        <input type="date" id="shopify_end_date" name="end_date" class="form-control" required>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-download"></i> Fetch Shopify Orders</button>
+            </form>
+            <div id="shopifyResult" class="integration-result"></div>
+        </div>
+        {% endif %}
+
         {% if shippo_enabled %}
         <div class="integration-section">
-            <h2>Shippo</h2>
+            <h2><i class="fas fa-shipping-fast"></i> Shippo</h2>
             <form id="shippoForm">
                 <div class="form-container">
                     <div class="form-group">
-                        <label for="shippo_start_date">Start Date:</label>
+                        <label for="shippo_start_date">Start Date</label>
                         <input type="date" id="shippo_start_date" name="start_date" class="form-control" required>
                     </div>
                     <div class="form-group">
-                        <label for="shippo_end_date">End Date:</label>
+                        <label for="shippo_end_date">End Date</label>
                         <input type="date" id="shippo_end_date" name="end_date" class="form-control" required>
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary">Fetch Shippo Orders</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-download"></i> Fetch Shippo Orders</button>
             </form>
-            <div id="shippoResult" class="mt-3"></div>
+            <div id="shippoResult" class="integration-result"></div>
         </div>
         {% endif %}
 
         {% if shipstation_enabled %}
         <div class="integration-section">
-            <h2>ShipStation</h2>
+            <h2><i class="fas fa-box-open"></i> ShipStation</h2>
             <form id="shipstationForm">
                 <div class="form-container">
                     <div class="form-group">
-                        <label for="ss_start_date">Start Date:</label>
+                        <label for="ss_start_date">Start Date</label>
                         <input type="date" id="ss_start_date" name="start_date" class="form-control" required>
                     </div>
                     <div class="form-group">
-                        <label for="ss_end_date">End Date:</label>
+                        <label for="ss_end_date">End Date</label>
                         <input type="date" id="ss_end_date" name="end_date" class="form-control" required>
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary">Fetch ShipStation Orders</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-download"></i> Fetch ShipStation Orders</button>
             </form>
-            <div id="shipstationResult" class="mt-3"></div>
+            <div id="shipstationResult" class="integration-result"></div>
         </div>
         {% endif %}
 
         {% if woocommerce_enabled %}
         <div class="integration-section">
-            <h2>WooCommerce</h2>
+            <h2><i class="fab fa-wordpress"></i> WooCommerce</h2>
             <form id="woocommerceForm">
                 <div class="form-container">
                     <div class="form-group">
-                        <label for="wc_start_date">Start Date:</label>
+                        <label for="wc_start_date">Start Date</label>
                         <input type="date" id="wc_start_date" name="start_date" class="form-control" required>
                     </div>
                     <div class="form-group">
-                        <label for="wc_end_date">End Date:</label>
+                        <label for="wc_end_date">End Date</label>
                         <input type="date" id="wc_end_date" name="end_date" class="form-control" required>
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary">Fetch WooCommerce Orders</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-download"></i> Fetch WooCommerce Orders</button>
             </form>
-            <div id="woocommerceResult" class="mt-3"></div>
+            <div id="woocommerceResult" class="integration-result"></div>
         </div>
         {% endif %}
     </div>
     {% endif %}
 
     <div class="recent-sales">
-        <h2>Recent Sales</h2>
-        
+        <div class="toolbar">
+            <h2 style="margin: 0;">Recent Sales</h2>
+            <div class="toolbar-spacer"></div>
+            <a href="{{ url_for('sales') }}" class="btn btn-secondary"><i class="fas fa-list"></i> All Sales</a>
+        </div>
+
         <div id="recentSalesGrid" class="ag-theme-alpine" style="width: 100%;"></div>
-    
-    {% block extra_scripts %}
-    
-    <script>
-    
-    document.addEventListener('DOMContentLoaded', function() {
-        var gridOptions = {
-            domLayout: "autoHeight",
-            columnDefs: [
-                {
-                    headerName: '',
-                    field: 'print',
-                    cellRenderer: function(params) {
-                        return '<i class="fas fa-print text-primary" style="cursor: pointer;"></i>';
-                    },
-                    onCellClicked: function(params) {
-                        window.open("/sales/print/" + params.data.id, '_blank');
-                    },
-                    maxWidth: 40,
-                    sortable: false,
-                    filter: false,
-                    resizable: false,
-                    suppressAutoSize: true,
-                    suppressSizeToFit: true
-                },
-                {
-                    headerName: "Date",
-                    field: "date",
-                    filter: 'agDateColumnFilter',
-                    filterParams: {
-                        comparator: function(filterLocalDateAtMidnight, cellValue) {
-                            var dateParts = cellValue.split('-');
-                            var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
+    </div>
+</div>
+{% endblock %}
 
-                            if (cellDate < filterLocalDateAtMidnight) {
-                                return -1;
-                            } else if (cellDate > filterLocalDateAtMidnight) {
-                                return 1;
-                            } else {
-                                return 0;
-                            }
-                        }
-                    },
-                    valueFormatter: function(params) {
-                        var dateParts = params.value.split('-');
-                        return `${dateParts[0]}-${dateParts[1]}-${dateParts[2]}`;
-                    }
+{% block extra_scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var gridOptions = {
+        domLayout: "autoHeight",
+        columnDefs: [
+            {
+                headerName: '',
+                field: 'print',
+                cellRenderer: function(params) {
+                    return '<i class="fas fa-print" title="Print" style="cursor: pointer;"></i>';
                 },
-                {
-                    headerName: "Ship Date",
-                    field: "shipdate",
-                    filter: 'agDateColumnFilter',
-                    filterParams: {
-                        comparator: function(filterLocalDateAtMidnight, cellValue) {
-                            var dateParts = cellValue.split('-');
-                            var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
-
-                            if (cellDate < filterLocalDateAtMidnight) {
-                                return -1;
-                            } else if (cellDate > filterLocalDateAtMidnight) {
-                                return 1;
-                            } else {
-                                return 0;
-                            }
-                        }
-                    }
+                onCellClicked: function(params) {
+                    window.open("/sales/print/" + params.data.id, '_blank');
                 },
-                { headerName: 'Order #', field: 'shipstation_order_id', sortable: true, filter: true, flex: 1 },
-                { headerName: 'Receipt #', field: 'order_number', sortable: true, filter: true, flex: 1 },
-                { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 1 },
-                { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator, flex: 1 },
-            ],
-            rowData: [
-                {% for sale in recent_sales %}
-                {
-                    id: {{ sale.id }},
-                    date: '{{ sale.date.strftime('%m-%d-%Y') }}',
-                    shipdate: '{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}',
-                    order_number: '{{ sale.order_number }}',
-                    shipstation_order_id: '{{ sale.shipstation_order_id }}',
-                    customer: '{{ sale.customer.name|cleaned }}',
-                    total: '{{ "%.2f"|format(sale.total) }}'
-                },
-                {% endfor %}
-            ],
-            defaultColDef: {
-                flex: 1,
-                minWidth: 100,
-                resizable: true,
-                comparator: caseInsensitiveComparator,
+                maxWidth: 44,
+                sortable: false,
+                filter: false,
+                resizable: false,
+                suppressAutoSize: true,
+                suppressSizeToFit: true
+            },
+            {
+                headerName: "Date",
+                field: "date",
+                filter: 'agDateColumnFilter',
                 filterParams: {
-                    buttons: ["apply", "reset"],
-                    closeOnApply: true
+                    comparator: function(filterLocalDateAtMidnight, cellValue) {
+                        var dateParts = cellValue.split('-');
+                        var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
+
+                        if (cellDate < filterLocalDateAtMidnight) {
+                            return -1;
+                        } else if (cellDate > filterLocalDateAtMidnight) {
+                            return 1;
+                        } else {
+                            return 0;
+                        }
+                    }
+                },
+                valueFormatter: function(params) {
+                    var dateParts = params.value.split('-');
+                    return `${dateParts[0]}-${dateParts[1]}-${dateParts[2]}`;
                 }
             },
-            onRowClicked: function(params) {
-                if (!params.event.target.classList.contains('fa-edit') && !params.event.target.classList.contains('fa-print')) {
-                    window.location.href = "/sales/view/" + params.data.id;
+            {
+                headerName: "Ship Date",
+                field: "shipdate",
+                filter: 'agDateColumnFilter',
+                filterParams: {
+                    comparator: function(filterLocalDateAtMidnight, cellValue) {
+                        var dateParts = cellValue.split('-');
+                        var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
+
+                        if (cellDate < filterLocalDateAtMidnight) {
+                            return -1;
+                        } else if (cellDate > filterLocalDateAtMidnight) {
+                            return 1;
+                        } else {
+                            return 0;
+                        }
+                    }
                 }
+            },
+            { headerName: 'Order #', field: 'external_order_number', sortable: true, filter: true, flex: 1 },
+            { headerName: 'Receipt #', field: 'receipt_number', sortable: true, filter: true, flex: 1 },
+            { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 2 },
+            { headerName: 'Total', field: 'total', valueFormatter: currencyFormatter, type: 'rightAligned',
+              sortable: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator, flex: 1 },
+        ],
+        rowData: [
+            {% for sale in recent_sales %}
+            {
+                id: {{ sale.id }},
+                date: '{{ sale.date.strftime('%m-%d-%Y') }}',
+                shipdate: '{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}',
+                receipt_number: '{{ sale.receipt_number|cleaned }}',
+                external_order_number: '{{ sale.external_order_number|cleaned }}',
+                customer: '{{ sale.customer.name|cleaned }}',
+                total: {{ "%.2f"|format(sale.total) }}
+            },
+            {% endfor %}
+        ],
+        defaultColDef: {
+            flex: 1,
+            minWidth: 100,
+            resizable: true,
+            comparator: caseInsensitiveComparator,
+            filterParams: {
+                buttons: ["apply", "reset"],
+                closeOnApply: true
             }
-        };
-        
-        var gridDiv = document.querySelector('#recentSalesGrid');
-        if (gridDiv && !gridDiv.gridInitialized) {
-            new agGrid.createGrid(gridDiv, gridOptions);
-            gridDiv.gridInitialized = true;
+        },
+        onRowClicked: function(params) {
+            if (!params.event.target.classList.contains('fa-edit') && !params.event.target.classList.contains('fa-print')) {
+                window.location.href = "/sales/view/" + params.data.id;
+            }
         }
+    };
 
-        // Set default dates (last 7 days)
-        const today = new Date();
-        today.setDate(today.getDate() + 1);
-        const todayString = today.toISOString().split('T')[0];
-        
-        const priorDate = new Date();
-        priorDate.setDate(today.getDate() - 7);
-        const priorDateString = priorDate.toISOString().split('T')[0];
-        
-        // Set dates for each form
-        {% if shippo_enabled %}
-        document.getElementById('shippo_start_date').value = priorDateString;
-        document.getElementById('shippo_end_date').value = todayString;
-        {% endif %}
-        
-        {% if shipstation_enabled %}
-        document.getElementById('ss_start_date').value = priorDateString;
-        document.getElementById('ss_end_date').value = todayString;
-        {% endif %}
-        
-        {% if woocommerce_enabled %}
-        document.getElementById('wc_start_date').value = priorDateString;
-        document.getElementById('wc_end_date').value = todayString;
-        {% endif %}
+    var gridDiv = document.querySelector('#recentSalesGrid');
+    if (gridDiv && !gridDiv.gridInitialized) {
+        agGrid.createGrid(gridDiv, gridOptions);
+        gridDiv.gridInitialized = true;
+    }
 
+    // Default every fetch form to the last 7 days, through end of today
+    var today = new Date();
+    var priorDate = new Date();
+    priorDate.setDate(today.getDate() - 7);
+
+    function isoDate(d) {
+        return d.getFullYear() + '-' +
+            String(d.getMonth() + 1).padStart(2, '0') + '-' +
+            String(d.getDate()).padStart(2, '0');
+    }
+
+    ['shopify', 'shippo', 'ss', 'wc'].forEach(function(prefix) {
+        var start = document.getElementById(prefix + '_start_date');
+        var end = document.getElementById(prefix + '_end_date');
+        if (start) start.value = isoDate(priorDate);
+        if (end) end.value = isoDate(today);
     });
+});
 
-    $(document).ready(function() {
-        {% if shipstation_enabled %}
-        $('#shipstationForm').submit(function(e) {
+$(document).ready(function() {
+    var fetchForms = [
+        ['#shopifyForm', '/shopify/fetch_orders', '#shopifyResult'],
+        ['#shippoForm', '/shippo/fetch_orders', '#shippoResult'],
+        ['#shipstationForm', '/shipstation/fetch_orders', '#shipstationResult'],
+        ['#woocommerceForm', '/woocommerce/fetch_orders', '#woocommerceResult']
+    ];
+
+    fetchForms.forEach(function(entry) {
+        var selector = entry[0], url = entry[1], resultSelector = entry[2];
+        $(selector).submit(function(e) {
             e.preventDefault();
-            $.ajax({
-                url: '/shipstation/fetch_orders',
-                method: 'POST',
-                data: $(this).serialize(),
-                success: function(response) {
-                    $('#shipstationResult').html('<div class="alert alert-success">' + response.message + '</div>');
-                    setTimeout(function() {
-                        location.reload();
-                    }, 1500);
-                },
-                error: function(xhr) {
-                    var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
-                    $('#shipstationResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
-                }
+            // Reload so the Recent Sales grid and the summary cards both reflect
+            // the import; the cards are rendered server-side.
+            submitFetchForm(this, url, resultSelector, function() {
+                setTimeout(function() { location.reload(); }, 1200);
             });
         });
-        {% endif %}
-        
-        {% if shippo_enabled %}
-        $('#shippoForm').submit(function(e) {
-            e.preventDefault();
-            $.ajax({
-                url: '/shippo/fetch_orders',
-                method: 'POST',
-                data: $(this).serialize(),
-                success: function(response) {
-                    $('#shippoResult').html('<div class="alert alert-success">' + response.message + '</div>');
-                    setTimeout(function() {
-                        location.reload();
-                    }, 1500);
-                },
-                error: function(xhr) {
-                    var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
-                    $('#shippoResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
-                }
-            });
-        });
-        {% endif %}
-        
-        {% if woocommerce_enabled %}
-        $('#woocommerceForm').submit(function(e) {
-            e.preventDefault();
-            $.ajax({
-                url: '/woocommerce/fetch_orders',
-                method: 'POST',
-                data: $(this).serialize(),
-                success: function(response) {
-                    $('#woocommerceResult').html('<div class="alert alert-success">' + response.message + '</div>');
-                    setTimeout(function() {
-                        location.reload();
-                    }, 1500);
-                },
-                error: function(xhr) {
-                    var errorMessage = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
-                    $('#woocommerceResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
-                }
-            });
-        });
-        {% endif %}
     });
-
-    </script>
-    {% endblock %}
-</div>
-
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        // Get today's date
-        const today = new Date();
-
-        // Add one day to today's date
-        today.setDate(today.getDate() + 1);
-        
-        // Format today's date as YYYY-MM-DD
-        const todayString = today.toISOString().split('T')[0];
-        
-        // Get the date 7 days prior
-        const priorDate = new Date();
-        priorDate.setDate(today.getDate() - 7);
-        
-        // Format the prior date as YYYY-MM-DD
-        const priorDateString = priorDate.toISOString().split('T')[0];
-        
-        // Set the default values for the input fields
-        document.getElementById('start_date').value = priorDateString;
-        document.getElementById('end_date').value = todayString;
-    });
+});
 </script>
-
 {% endblock %}

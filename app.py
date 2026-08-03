@@ -1,81 +1,215 @@
 # app.py
+import base64
 import click
-from contextlib import contextmanager
+from collections import namedtuple
 import csv
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, abort, render_template, request, redirect, url_for, flash, jsonify
 from flask.cli import with_appcontext
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user
 from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
 from functools import wraps
+import hashlib
+import hmac
 import io
 import json
 import logging
 from logging.handlers import RotatingFileHandler
-from markupsafe import Markup
+from markupsafe import escape, Markup
 import os
 import pycountry
-import pycountry_convert as pc
-import pytz
 import random
 import re
 import requests
-import shippo
-from shippo import components
-from sqlalchemy import and_, create_engine, extract, func
-from sqlalchemy.exc import SQLAlchemyError, IntegrityError
-from sqlalchemy.orm import joinedload, sessionmaker
-from sqlalchemy.pool import QueuePool
+from sqlalchemy import event, func
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError
+from sqlalchemy.orm import joinedload
 import sqlite3
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load .env before anything reads os.environ. Optional: production installs keep
+# their credentials in the database via the Management page, and .env is only a
+# convenience for development. Values already exported win over the file.
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    pass
+else:
+    load_dotenv(os.path.join(BASE_DIR, '.env'), override=False)
+
 app = Flask(__name__)
 
-# Logging Setup
-if not os.path.exists('logs'):
-    os.makedirs('logs')
+# Logging Setup — absolute path so the log lands next to app.py no matter what
+# working directory the launcher/service starts us in
+LOG_DIR = os.path.join(BASE_DIR, 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
 
-handler = RotatingFileHandler('logs/sales_tracker.log', maxBytes=10000000, backupCount=5)
+handler = RotatingFileHandler(os.path.join(LOG_DIR, 'sales_tracker.log'),
+                              maxBytes=10000000, backupCount=5)
 handler.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 app.logger.addHandler(handler)
 app.logger.setLevel(logging.INFO)
 
-UPLOAD_FOLDER = 'static/uploads'
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-max_retries = 3
-retry_delay = 0.5
 
-# Use environment variable for secret key, with a fallback for development
-app.config['SECRET_KEY'] = 'SECRETKEY' #os.environ.get('FLASK_SECRET_KEY') or os.urandom(24) # disable for testing only
+os.makedirs(app.instance_path, exist_ok=True)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sales.db?timeout=20'
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'poolclass': QueuePool,
-    'pool_size': 10,
-    'max_overflow': 20,
-    'pool_timeout': 30,
-    'pool_recycle': 1800,
-}
+DB_PATH = os.path.join(app.instance_path, 'sales.db')
+BACKUP_DIR = os.path.join(app.instance_path, 'backups')
+BACKUP_RETAIN = int(os.environ.get('SALES_TRACKER_BACKUP_RETAIN', '14'))
+
+def load_secret_key():
+    """FLASK_SECRET_KEY if set, else a persisted random key.
+
+    The key has to survive restarts — a fresh os.urandom(24) each boot would
+    invalidate every session cookie and log the user out on every restart.
+    """
+    from_env = os.environ.get('FLASK_SECRET_KEY')
+    if from_env:
+        return from_env
+
+    key_path = os.path.join(app.instance_path, 'secret_key')
+    if os.path.exists(key_path):
+        with open(key_path, 'rb') as fh:
+            key = fh.read().strip()
+            if key:
+                return key
+
+    key = os.urandom(32).hex().encode()
+    with open(key_path, 'wb') as fh:
+        fh.write(key)
+    try:
+        os.chmod(key_path, 0o600)
+    except OSError:
+        # Best effort; Windows ACLs are managed outside the app
+        pass
+    app.logger.info(f"Generated a new session secret key at {key_path}")
+    return key
+
+app.config['SECRET_KEY'] = load_secret_key()
+
+# Defaults to instance/sales.db. Overridable so tests can run against a scratch
+# copy instead of live data.
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
+    'SALES_TRACKER_DATABASE_URI', 'sqlite:///sales.db?timeout=20')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16 MB cap on uploads
+
+# Session hardening. The app is served over plain HTTP on the LAN, so Secure is
+# opt-in via SESSION_COOKIE_SECURE=1 for anyone terminating TLS in front of it.
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '') == '1'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=14)
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
-# Create a custom engine with a connection pool
-#engine = create_engine(app.config['SQLALCHEMY_DATABASE_URI'], poolclass=QueuePool, **app.config['SQLALCHEMY_ENGINE_OPTIONS'])
-Session = db.sessionmaker()
+@event.listens_for(Engine, 'connect')
+def _sqlite_pragmas(dbapi_connection, connection_record):
+    """Enforce foreign keys and use WAL journaling on every SQLite connection.
+
+    SQLite defaults foreign_keys to OFF, which let bad writes through silently
+    (see the import pipeline). WAL lets the app keep reading while a write is in
+    flight, which is what the old 'database is locked' retries were papering over.
+    """
+    if not isinstance(dbapi_connection, sqlite3.Connection):
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute('PRAGMA foreign_keys=ON')
+        cursor.execute('PRAGMA journal_mode=WAL')
+        cursor.execute('PRAGMA synchronous=NORMAL')
+        cursor.execute('PRAGMA busy_timeout=20000')
+    finally:
+        cursor.close()
+
+def configured_sqlite_path():
+    """Filesystem path of the SQLite database actually in use, or None.
+
+    Reads the live config rather than assuming instance/sales.db, so an override
+    (tests, a second install) gets backed up instead of the default file.
+    """
+    uri = app.config.get('SQLALCHEMY_DATABASE_URI', '')
+    if not uri.startswith('sqlite:///'):
+        return None
+    path = uri[len('sqlite:///'):].split('?', 1)[0]
+    if not path:
+        return None  # sqlite:///:memory: and friends
+    if not os.path.isabs(path):
+        path = os.path.join(app.instance_path, path)
+    return os.path.normpath(path)
+
+def backup_database(db_path=None, backup_dir=None, retain=None, logger=None):
+    """Snapshot the SQLite database with the online backup API and prune old copies.
+
+    Safe to call while the app is serving: sqlite3.Connection.backup() takes a
+    consistent copy without blocking readers, unlike a file copy.
+    Returns the path written, or None if there was nothing to back up.
+    """
+    db_path = db_path or configured_sqlite_path() or DB_PATH
+    backup_dir = backup_dir or BACKUP_DIR
+    retain = BACKUP_RETAIN if retain is None else retain
+    log = logger or app.logger
+
+    if not os.path.exists(db_path):
+        log.warning(f"No database at {db_path}; skipping backup")
+        return None
+
+    os.makedirs(backup_dir, exist_ok=True)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    target = os.path.join(backup_dir, f'sales-{stamp}.db')
+
+    source = sqlite3.connect(db_path)
+    try:
+        destination = sqlite3.connect(target)
+        try:
+            source.backup(destination)
+        finally:
+            destination.close()
+        integrity = source.execute('PRAGMA quick_check').fetchone()[0]
+    finally:
+        source.close()
+
+    if integrity == 'ok':
+        log.info(f"Backup written to {target} (quick_check: ok)")
+    else:
+        log.error(f"Backup written to {target} but quick_check FAILED: {integrity}")
+
+    # Retain the newest `retain` snapshots; names sort chronologically
+    snapshots = sorted(
+        f for f in os.listdir(backup_dir)
+        if f.startswith('sales-') and f.endswith('.db')
+    )
+    for stale in snapshots[:-retain] if retain > 0 else []:
+        try:
+            os.remove(os.path.join(backup_dir, stale))
+            log.info(f"Pruned old backup {stale}")
+        except OSError as e:
+            log.warning(f"Could not prune {stale}: {e}")
+
+    return target
 
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
+# 'basic', not 'strong': strong protection deletes the session whenever the
+# client's IP or user-agent changes, which on a LAN means a laptop moving between
+# access points gets silently logged out mid-task. The cookie flags above carry
+# the real protection here.
+login_manager.session_protection = 'basic'
 
 @click.command('create-admin')
 @with_appcontext
@@ -97,32 +231,36 @@ def create_admin(username, password):
 
 app.cli.add_command(create_admin)
 
+@click.command('backup-db')
+@with_appcontext
+def backup_db_command():
+    """Write a timestamped snapshot of the database to instance/backups."""
+    target = backup_database()
+    click.echo(f"Backup written to {target}" if target else "Nothing to back up.")
+
+app.cli.add_command(backup_db_command)
+
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@contextmanager
-def session_scope():
-    session = Session()
-    try:
-        yield session
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        raise
-    finally:
-        session.close()
-
 # Retry decorator
 def retry_on_db_lock(max_retries=3, delay=0.1):
+    """Retry a call that lost a race for the SQLite write lock.
+
+    SQLAlchemy wraps the driver error, so the raised type is
+    sqlalchemy.exc.OperationalError — catching sqlite3.OperationalError (as this
+    did originally) never matched and the retry never fired.
+    """
     def decorator(func):
         @wraps(func)  # This preserves the original function's metadata
         def wrapper(*args, **kwargs):
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
-                except sqlite3.OperationalError as e:
+                except (OperationalError, sqlite3.OperationalError) as e:
                     if "database is locked" in str(e) and attempt < max_retries - 1:
+                        db.session.rollback()
                         time.sleep(delay * (2 ** attempt) + random.uniform(0, 0.1))
                     else:
                         raise
@@ -200,8 +338,25 @@ class Product(db.Model):
 
 class SalesReceipt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    shipstation_order_id = db.Column(db.String(50), unique=True, nullable=True)
-    order_number = db.Column(db.String(50), nullable=True)
+
+    # Three identifiers, three jobs. They are not interchangeable — see
+    # apply_order_to_sale, and migrations/rename_order_identifier_columns.py for
+    # the history behind the old names.
+    #
+    # Sales Tracker's own receipt number. Always the receipt's id, whether the
+    # sale was entered by hand or imported.
+    receipt_number = db.Column(db.String(50), nullable=True)
+    # The selling platform's human-facing order number ("#1001", "4094194072").
+    # Display only, never a match key: older rows hold a ShipStation orderId here
+    # instead, and it is not unique in the live database (the table was rebuilt
+    # without the constraint), so the model must not claim it is.
+    external_order_number = db.Column(db.String(50), nullable=True)
+    # Which system this receipt came from: 'shipstation', 'shippo', 'shopify',
+    # 'manual', or NULL for rows predating this column
+    source = db.Column(db.String(20), nullable=True, index=True)
+    # That platform's internal order id. (source, external_order_id) is the
+    # duplicate-detection key for re-imports.
+    external_order_id = db.Column(db.String(64), nullable=True, index=True)
     customer_id = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
     #customer_name = db.relationship('Customer', backref='sales_receipts', lazy=True)
     customer = db.relationship('Customer', back_populates='sales', lazy=True)
@@ -218,9 +373,11 @@ class SalesReceipt(db.Model):
 
     def to_dict(self):
         return {
-            'id': self.id, # Uniquie identification number
-            'shipstation_order_id': self.shipstation_order_id, # ID number generated by Shipstation
-            'order_number': self.order_number, # Order number from the marketplace
+            'id': self.id,
+            'receipt_number': self.receipt_number,        # ours
+            'external_order_number': self.external_order_number,  # the platform's, human-facing
+            'external_order_id': self.external_order_id,  # the platform's, internal
+            'source': self.source,
             'customer_id': self.customer_id,
             'customer_name': self.customer.name if self.customer else None,
             'shipservice': self.shipservice if self.shipservice else None,
@@ -278,6 +435,110 @@ class ShippoCredentials(db.Model):
     api_key = db.Column(db.String(100), nullable=False)
     enabled = db.Column(db.Boolean, default=False, nullable=False)
 
+class ShopifyCredentials(db.Model):
+    """Credentials for one Shopify store, supporting both auth routes.
+
+    Legacy custom app (auth_mode='token'):
+        api_key    — Admin API access token (shpat_…), used directly and forever
+        api_secret — the app's API secret key, verifies webhook HMACs
+
+    Dev Dashboard app (auth_mode='client_credentials'):
+        client_id / client_secret — exchanged for a 24-hour access token
+        access_token / access_token_expires_at — the cached result of that
+            exchange, persisted so a restart does not force a new round trip
+        client_secret also verifies webhook HMACs for this route
+
+    shop_domain is the *.myshopify.com host, not the customer-facing domain.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    shop_domain = db.Column(db.String(120), nullable=False, default='', server_default='')
+    auth_mode = db.Column(db.String(20), nullable=False, default='token', server_default='token')
+
+    api_key = db.Column(db.String(120), nullable=False)
+    api_secret = db.Column(db.String(120), nullable=False, default='', server_default='')
+
+    client_id = db.Column(db.String(120), nullable=False, default='', server_default='')
+    client_secret = db.Column(db.String(120), nullable=False, default='', server_default='')
+    access_token = db.Column(db.String(255), nullable=False, default='', server_default='')
+    access_token_expires_at = db.Column(db.DateTime, nullable=True)
+
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
+    webhooks_enabled = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
+
+class PendingOrder(db.Model):
+    """An imported order held back because the platform withheld the buyer's details.
+
+    Shopify returns null for name, email, phone and address unless the app is
+    approved for protected customer data — for an admin-created custom app that
+    depends on the store's plan. Such an order has usable money and line items but
+    nobody to attach them to, and an address with no city or ZIP cannot be
+    classified for state tax reporting.
+
+    Rather than create a half-identified sale that quietly lands in the 'Unknown'
+    bucket, the order is parked here until someone supplies the customer. Nothing
+    in this table counts toward any total.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    source = db.Column(db.String(20), nullable=False, index=True)
+    external_order_id = db.Column(db.String(64), nullable=False, index=True)
+    external_order_number = db.Column(db.String(50))
+    order_date = db.Column(db.DateTime)
+    total = db.Column(db.Float, nullable=False, default=0)
+    tax = db.Column(db.Float, nullable=False, default=0)
+    shipping = db.Column(db.Float, nullable=False, default=0)
+    shipservice = db.Column(db.String(50))
+    tracking = db.Column(db.String(50))
+    shipdate = db.Column(db.Date)
+    customer_notes = db.Column(db.String(500))
+    internal_notes = db.Column(db.String(500))
+    # The full processed order as JSON, so the receipt can be built on completion
+    payload = db.Column(db.Text, nullable=False, default='{}')
+    imported_at = db.Column(db.DateTime, default=datetime.now)
+
+    __table_args__ = (
+        db.UniqueConstraint('source', 'external_order_id', name='uq_pending_order_source_ext'),
+    )
+
+    def items(self):
+        try:
+            return json.loads(self.payload or '{}').get('items', [])
+        except ValueError:
+            return []
+
+    def location_hint(self):
+        """Whatever partial location the platform did share, e.g. 'CA, US'.
+
+        Shopify tends to withhold street, city and ZIP but still return
+        province_code and country_code. Not enough to classify a sale, but a
+        useful head start when filling in the customer.
+        """
+        try:
+            customer = json.loads(self.payload or '{}').get('customer', {})
+        except ValueError:
+            return ''
+        parts = [customer.get('state'), customer.get('country')]
+        return ', '.join(part for part in parts if part)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'source': self.source,
+            'external_order_id': self.external_order_id,
+            'external_order_number': self.external_order_number,
+            'order_date': self.order_date.strftime('%Y-%m-%d') if self.order_date else None,
+            'total': float(self.total),
+            'tax': float(self.tax),
+            'shipping': float(self.shipping),
+            'shipservice': self.shipservice,
+            'tracking': self.tracking,
+            'shipdate': self.shipdate.strftime('%Y-%m-%d') if self.shipdate else None,
+            'customer_notes': self.customer_notes,
+            'location_hint': self.location_hint(),
+            'items': ', '.join(
+                f"{item.get('quantity')}x {item.get('sku')}" for item in self.items()),
+            'imported_at': self.imported_at.strftime('%Y-%m-%d') if self.imported_at else None,
+        }
+
 class BankTransaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
@@ -310,7 +571,18 @@ class BankTransaction(db.Model):
 # Filters
 @app.template_filter('nl2br')
 def nl2br(value):
-    return Markup(value.replace('\n', '<br>\n'))
+    if value is None:
+        return ''
+    return Markup(escape(value).replace('\n', Markup('<br>\n')))
+
+@app.template_filter('maps_query')
+def maps_query(value):
+    """Collapse a multi-line address into a single URL-safe Google Maps query.
+
+    Addresses are user/import supplied, so they must never be interpolated into
+    an href unescaped — newlines and quotes would break out of the attribute.
+    """
+    return quote_plus(' '.join((value or '').split()))
 
 @app.template_filter('cleaned')
 def cleaned(value):
@@ -342,46 +614,46 @@ def index():
     total_revenue = db.session.query(func.sum(SalesReceipt.total)).scalar() or 0
     total_sales = SalesReceipt.query.count()
     total_customers = Customer.query.count()
-    recent_sales = SalesReceipt.query.order_by(SalesReceipt.date.desc()).limit(10).all()
+    recent_sales = SalesReceipt.query.options(joinedload(SalesReceipt.customer)) \
+        .order_by(SalesReceipt.date.desc()).limit(10).all()
     company_info = CompanyInfo.get_info()
-    
-    # Get integration status
-    shippo_credentials = ShippoCredentials.query.first()
-    shipstation_credentials = ShipStationCredentials.query.first()
-    woocommerce_credentials = WooCommerceCredentials.query.first()
-    
-    shippo_enabled = shippo_credentials.enabled if shippo_credentials else False
-    shipstation_enabled = shipstation_credentials.enabled if shipstation_credentials else False
-    woocommerce_enabled = woocommerce_credentials.enabled if woocommerce_credentials else False
 
-    return render_template('index.html', 
+    def is_enabled(model):
+        credentials = model.query.first()
+        return bool(credentials and credentials.enabled)
+
+    return render_template('index.html',
+                           pending_order_count=PendingOrder.query.count(),
                            total_revenue=total_revenue,
                            total_sales=total_sales,
                            total_customers=total_customers,
                            recent_sales=recent_sales,
                            company_info=company_info,
-                           shippo_enabled=shippo_enabled,
-                           shipstation_enabled=shipstation_enabled,
-                           woocommerce_enabled=woocommerce_enabled)
+                           shippo_enabled=is_enabled(ShippoCredentials),
+                           shipstation_enabled=is_enabled(ShipStationCredentials),
+                           woocommerce_enabled=is_enabled(WooCommerceCredentials),
+                           shopify_enabled=is_enabled(ShopifyCredentials))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     next_page = request.args.get('next')
     if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
-            login_user(user)
+            login_user(user, remember=False)
             flash('Logged in successfully.', 'success')
-            # Check if the next parameter is set and is safe to redirect
-            if next_page and urlparse(next_page).netloc == '':
+            # Only redirect to same-origin paths, never an attacker-supplied host
+            parsed = urlparse(next_page or '')
+            if next_page and not parsed.netloc and not parsed.scheme and next_page.startswith('/'):
                 return redirect(next_page)
             else:
                 return redirect(url_for('index'))
         else:
+            app.logger.warning(f"Failed login for username '{username}' from {request.remote_addr}")
             flash('Invalid username or password', 'error')
-        
+
     company_info = CompanyInfo.get_info()
 
     return render_template('login.html', next=next_page, company_info=company_info)
@@ -393,94 +665,123 @@ def logout():
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
 
+# Each integration's Management form: field prefix, model, secret fields (never
+# echoed back to the browser) and plain fields (safe to render).
+INTEGRATION_FORMS = (
+    ('shippo', ShippoCredentials, ('api_key',), ()),
+    ('ss', ShipStationCredentials, ('api_key', 'api_secret'), ()),
+    ('wc', WooCommerceCredentials, ('api_key', 'api_secret'), ()),
+    ('shopify', ShopifyCredentials,
+     ('api_key', 'api_secret', 'client_id', 'client_secret'), ('shop_domain',)),
+)
+
+def _save_integration_credentials(form):
+    """Apply the Management form to every integration's stored credentials.
+
+    Secret fields render blank with a "saved" hint, so a blank submission means
+    "leave unchanged" — secrets never round-trip through the page HTML.
+    """
+    for prefix, model, secret_fields, plain_fields in INTEGRATION_FORMS:
+        record = model.query.first()
+        submitted = {
+            field: (form.get(f'{prefix}_{field}') or '').strip()
+            for field in secret_fields + plain_fields
+        }
+        enabled = f'{prefix}_enabled' in form
+
+        if record is None:
+            # Don't create an empty row for an integration that was never touched
+            if not any(submitted.values()) and not enabled:
+                continue
+            record = model(**{field: submitted.get(field, '') for field in secret_fields + plain_fields})
+            record.enabled = enabled
+            db.session.add(record)
+            continue
+
+        for field in secret_fields:
+            if submitted[field]:
+                setattr(record, field, submitted[field])
+        for field in plain_fields:
+            setattr(record, field, submitted[field])
+        record.enabled = enabled
+
+    shopify = ShopifyCredentials.query.first()
+    if shopify:
+        shopify.webhooks_enabled = 'shopify_webhooks_enabled' in form
+
+        requested_mode = (form.get('shopify_auth_mode') or '').strip()
+        if requested_mode in ('token', 'client_credentials'):
+            if requested_mode != shopify.auth_mode:
+                # Switching routes invalidates any token cached from the old one
+                shopify.access_token = ''
+                shopify.access_token_expires_at = None
+            shopify.auth_mode = requested_mode
+
+        # A new client id/secret means the cached 24-hour token no longer matches
+        # the credentials that produced it
+        if (form.get('shopify_client_id') or '').strip() or (form.get('shopify_client_secret') or '').strip():
+            shopify.access_token = ''
+            shopify.access_token_expires_at = None
+
 @app.route('/management', methods=['GET', 'POST'])
 @login_required
 def management():
     company_info = CompanyInfo.get_info()
-    shippo_credentials = ShippoCredentials.query.first()
-    shipstation_credentials = ShipStationCredentials.query.first()
-    woocommerce_credentials = WooCommerceCredentials.query.first()
 
     if request.method == 'POST':
-        if 'logo' in request.files:
-            file = request.files['logo']
-            if file and allowed_file(file.filename):
+        logo_path = company_info.logo if company_info else None
+        file = request.files.get('logo')
+        if file and file.filename:
+            if allowed_file(file.filename):
                 filename = secure_filename(file.filename)
-                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-                file.save(file_path)
+                os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
                 logo_path = f'/static/uploads/{filename}'
             else:
-                logo_path = company_info.logo if company_info else None
-        else:
-            logo_path = company_info.logo if company_info else None
+                flash('Logo must be a PNG, JPG, JPEG or GIF file. Other settings were saved.', 'warning')
 
+        fields = {
+            'name': (request.form.get('name') or '').strip(),
+            'address': (request.form.get('address') or '').strip(),
+            'phone': (request.form.get('phone') or '').strip(),
+            'email': (request.form.get('email') or '').strip(),
+            'logo': logo_path,
+        }
         if company_info:
-            company_info.name = request.form['name']
-            company_info.address = request.form['address']
-            company_info.phone = request.form['phone']
-            company_info.email = request.form['email']
-            company_info.logo = logo_path
+            for key, value in fields.items():
+                setattr(company_info, key, value)
         else:
-            new_info = CompanyInfo(
-                name=request.form['name'],
-                address=request.form['address'],
-                phone=request.form['phone'],
-                email=request.form['email'],
-                logo=logo_path
-            )
-            db.session.add(new_info)
+            db.session.add(CompanyInfo(**fields))
 
-        # Update Shippo credentials
-        if shippo_credentials:
-            shippo_credentials.api_key = request.form['shippo_api_key']
-            shippo_credentials.enabled = 'shippo_enabled' in request.form
-        else:
-            new_credentials = ShippoCredentials(
-                api_key=request.form['shippo_api_key'],
-                enabled='shippo_enabled' in request.form
-            )
-            db.session.add(new_credentials)
-
-        # Update ShipStation credentials
-        if shipstation_credentials:
-            shipstation_credentials.api_key = request.form['ss_api_key']
-            shipstation_credentials.api_secret = request.form['ss_api_secret']
-            shipstation_credentials.enabled = 'ss_enabled' in request.form
-        else:
-            new_credentials = ShipStationCredentials(
-                api_key=request.form['ss_api_key'],
-                api_secret=request.form['ss_api_secret'],
-                enabled='ss_enabled' in request.form
-            )
-            db.session.add(new_credentials)
-
-        # Update WooCommerce credentials
-        if woocommerce_credentials:
-            woocommerce_credentials.api_key = request.form['wc_api_key']
-            woocommerce_credentials.api_secret = request.form['wc_api_secret']
-            woocommerce_credentials.enabled = 'wc_enabled' in request.form
-        else:
-            new_credentials = WooCommerceCredentials(
-                api_key=request.form['wc_api_key'],
-                api_secret=request.form['wc_api_secret'],
-                enabled='wc_enabled' in request.form
-            )
-            db.session.add(new_credentials)
+        _save_integration_credentials(request.form)
 
         try:
             db.session.commit()
             flash('Settings updated successfully.', 'success')
-        except IntegrityError:
+        except SQLAlchemyError as e:
             db.session.rollback()
+            app.logger.error(f"Error updating settings: {e}")
             flash('Error updating settings.', 'error')
 
         return redirect(url_for('management'))
 
-    return render_template('management.html', 
-                         company_info=company_info, 
-                         shippo_credentials=shippo_credentials, 
-                         shipstation_credentials=shipstation_credentials, 
-                         woocommerce_credentials=woocommerce_credentials)
+    shopify = ShopifyCredentials.query.first()
+    return render_template('management.html',
+                         company_info=company_info,
+                         shippo_credentials=ShippoCredentials.query.first(),
+                         shipstation_credentials=ShipStationCredentials.query.first(),
+                         woocommerce_credentials=WooCommerceCredentials.query.first(),
+                         shopify_credentials=shopify,
+                         shopify_auth_mode=shopify_auth_mode(shopify) if shopify else 'token',
+                         shopify_shop_domain=shopify_shop_domain(shopify) if shopify else '',
+                         # Which fields an environment variable is supplying, so the
+                         # page can say why editing one has no effect
+                         shopify_from_env={
+                             field: bool(shopify_env_value(field))
+                             for field in SHOPIFY_ENV_FIELDS
+                         },
+                         shopify_token_expires_at=shopify.access_token_expires_at if shopify else None,
+                         webhook_url=url_for('shopify_webhook', _external=True))
 
 @app.route('/state_taxes')
 @login_required
@@ -558,61 +859,99 @@ def customers():
 
     return render_template('customers.html', customers=customers, company_info=company_info)
 
+def _placeholder_email():
+    """Customer.email is unique and NOT NULL, so customers without a real address
+    (common on marketplace imports) get a unique synthetic one. The UI hides these
+    — see emailValueFormatter in script.js."""
+    email = f"placeholder_{uuid.uuid4().hex}@example.com"
+    app.logger.warning(f"Missing customer email. Generated placeholder: {email}")
+    return email
+
+def _parse_customer_payload(data, existing=None):
+    """Validate a customer add/edit payload; returns (fields, error_message).
+
+    Every field is read with .get() so a partial payload is a 400 with a readable
+    message rather than a KeyError 500. A blank email keeps the customer's current
+    placeholder (on edit) or mints a new one (on add) instead of violating the
+    unique NOT NULL constraint.
+    """
+    name = (data.get('name') or '').strip()
+    if not name:
+        return None, 'Name is required'
+
+    email = (data.get('email') or '').strip()
+    if not email:
+        if existing and existing.email:
+            email = existing.email
+        else:
+            email = _placeholder_email()
+
+    return {
+        'name': name,
+        'company': (data.get('company') or '').strip(),
+        'email': email,
+        'email_2': (data.get('email_2') or '').strip() or None,
+        'phone': (data.get('phone') or '').strip(),
+        'billing_address': (data.get('billing_address') or '').strip(),
+        'shipping_address': (data.get('shipping_address') or '').strip(),
+    }, None
+
 @app.route('/customers/add', methods=['POST'])
 @login_required
 def add_customer():
-    try:
-        data = request.json
-        
-        #get_or_create_customer(data)  will want to try to swtich to this at some point
+    fields, error = _parse_customer_payload(request.json or {})
+    if error:
+        return jsonify({'success': False, 'message': error, 'category': 'error'}), 400
 
-        if not data['email']:
-            # Generate a unique placeholder email
-            placeholder_email = f"placeholder_{uuid.uuid4().hex}@example.com"
-            app.logger.warning(f"Missing customer email. Generated placeholder: {placeholder_email}")
-            data['email'] = placeholder_email
-        
-        new_customer = Customer(
-            name=data['name'],
-            company=data['company'],
-            email=data['email'],
-            email_2=data['email_2'],
-            phone=data['phone'],
-            billing_address=data['billing_address'],
-            shipping_address=data['shipping_address']
-        )
-        db.session.add(new_customer)
+    new_customer = Customer(**fields)
+    db.session.add(new_customer)
+    try:
         db.session.commit()
-        
-        app.logger.info(f"Successfully added customer {new_customer.name}")
-        
-        return jsonify({'success': True, 'id': new_customer.id, 'message': f'Customer {new_customer.name} added successfully.', 'category': 'success'}), 200
-    except Exception as e:
+    except IntegrityError:
         db.session.rollback()
-        # Hide this error because we have a better error display method through showFlashMessage
-        #app.logger.error(f"Error adding customer {new_customer.name}: {str(e)}")
-        return jsonify({'success': False, 'message': f'Error adding customer: {str(e)}', 'category': 'error'}), 400
+        return jsonify({
+            'success': False,
+            'message': f"A customer with the email {fields['email']} already exists.",
+            'category': 'error'
+        }), 409
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f"Error adding customer {fields['name']}: {e}")
+        return jsonify({'success': False, 'message': 'Error adding customer.', 'category': 'error'}), 400
+
+    app.logger.info(f"Successfully added customer {new_customer.name}")
+    return jsonify({
+        'success': True,
+        'id': new_customer.id,
+        'message': f'Customer {new_customer.name} added successfully.',
+        'category': 'success'
+    }), 200
 
 @app.route('/customers/edit/<int:id>', methods=['POST'])
 @login_required
 def edit_customer(id):
+    customer = db.get_or_404(Customer, id)
+    fields, error = _parse_customer_payload(request.json or {}, existing=customer)
+    if error:
+        return jsonify({'success': False, 'message': error, 'category': 'error'}), 400
+
+    for key, value in fields.items():
+        setattr(customer, key, value)
     try:
-        customer = Customer.query.get_or_404(id)
-        data = request.json
-        customer.name = data['name']
-        customer.company = data['company']
-        customer.email = data['email']
-        customer.email_2 = data['email_2']
-        customer.phone = data['phone']
-        customer.billing_address = data['billing_address']
-        customer.shipping_address = data['shipping_address']
         db.session.commit()
-        return jsonify({'success': True, 'message': 'Customer updated successfully.', 'category': 'success'}), 200
-    except Exception as e:
+    except IntegrityError:
         db.session.rollback()
-        # Hide this error because we have a better error display method through showFlashMessage
-        #app.logger.error(f"Error updating customer: {str(e)}")
-        return jsonify({'success': False, 'message': f'Error updating customer: {str(e)}', 'category': 'error'}), 400
+        return jsonify({
+            'success': False,
+            'message': f"Another customer already uses the email {fields['email']}.",
+            'category': 'error'
+        }), 409
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f"Error updating customer {id}: {e}")
+        return jsonify({'success': False, 'message': 'Error updating customer.', 'category': 'error'}), 400
+
+    return jsonify({'success': True, 'message': 'Customer updated successfully.', 'category': 'success'}), 200
 
 @app.route('/customers/get/<int:id>')
 @login_required
@@ -880,13 +1219,15 @@ def add_sale():
         shipping=shipping,
         customer_notes=data.get('customer_notes', ''),
         internal_notes=data.get('internal_notes', ''),
-        shipstation_order_id=data.get('shipstation_order_id', '')
+        external_order_number=data.get('external_order_number', ''),
+        # Marks the receipt as hand-entered so an import can never claim it
+        source='manual'
     )
     db.session.add(new_sale)
     db.session.flush()
 
     # This assigns an ID to new_sale
-    new_sale.order_number = new_sale.id
+    new_sale.receipt_number = new_sale.id
 
     for product_id, quantity, price_each, total_price in parsed_items:
         db.session.add(LineItem(
@@ -906,16 +1247,16 @@ def get_sale(id):
     sale = SalesReceipt.query.options(joinedload(SalesReceipt.customer), joinedload(SalesReceipt.line_items)).get_or_404(id)
     return jsonify({
         'id': sale.id,
-        'shipstation_order_id': sale.shipstation_order_id, # Used as a generic order ID
-        'order_number': sale.order_number,
+        'external_order_number': sale.external_order_number,
+        'receipt_number': sale.receipt_number,
         'customer_id': sale.customer_id,
         'customer_name': sale.customer.name,
-        'customer_email': sale.customer_email,
-        'customer_phone': sale.customer_phone,
+        'customer_email': sale.customer.email,
+        'customer_phone': sale.customer.phone,
         'customer_company': sale.customer.company,
         'shipservice': sale.shipservice,
         'tracking': sale.tracking,
-        'shipdate': sale.shipdate.strftime('%m-%d-%Y'),
+        'shipdate': sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else None,
         'date': sale.date.strftime('%m-%d-%Y'),
         'subtotal': float(sale.total - sale.tax - sale.shipping),
         'tax': float(sale.tax),
@@ -954,7 +1295,7 @@ def edit_sale(id):
             sale.tax = Decimal(request.form['tax'])
             sale.customer_notes = request.form['customer_notes']
             sale.internal_notes = request.form['internal_notes']
-            sale.shipstation_order_id = request.form['shipstation_order_id']
+            sale.external_order_number = request.form.get('external_order_number') or None
 
             # Handle line items
             # First, remove all existing line items
@@ -1009,21 +1350,140 @@ def view_sale(id):
     ).get_or_404(id)
 
     company_info = CompanyInfo.get_info()
+    shipstation = ShipStationCredentials.query.first()
 
-    return render_template('view_sale.html', sale=sale, company_info=company_info)
+    return render_template('view_sale.html', sale=sale, company_info=company_info,
+                           shipstation_enabled=bool(shipstation and shipstation.enabled))
 
 @app.route('/sales/delete/<int:id>', methods=['POST'])
 @login_required
 def delete_sale(id):
     sale = SalesReceipt.query.get_or_404(id)
-    
-    # Delete associated line items
-    LineItem.query.filter_by(receipt_id=id).delete()
-    
-    # Delete the sale
-    db.session.delete(sale)
-    db.session.commit()
-    return jsonify({'success': True})
+
+    try:
+        # Reconciled bank transactions point at this receipt; unlink them first so
+        # the delete cannot fail on the foreign key (kept: the transaction itself)
+        unlinked = BankTransaction.query.filter_by(receipt_id=id).update(
+            {BankTransaction.receipt_id: None}, synchronize_session=False)
+
+        LineItem.query.filter_by(receipt_id=id).delete()
+        db.session.delete(sale)
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f"Error deleting sale {id}: {e}")
+        return jsonify({'success': False, 'error': 'Could not delete this sale.'}), 400
+
+    message = f'Sale #{id} deleted.'
+    if unlinked:
+        message += f' Unlinked {unlinked} bank transaction(s).'
+    return jsonify({'success': True, 'message': message})
+
+@app.route('/sales/pending')
+@login_required
+def pending_orders():
+    """Orders imported without buyer details, waiting for a customer to be named."""
+    customers = Customer.query.order_by(Customer.name).all()
+    return render_template('pending_orders.html',
+                           customers=customers,
+                           company_info=CompanyInfo.get_info())
+
+@app.route('/api/pending_orders')
+@login_required
+def get_pending_orders():
+    orders = PendingOrder.query.order_by(PendingOrder.order_date.desc()).all()
+    return jsonify([order.to_dict() for order in orders])
+
+@app.route('/api/pending_orders/count')
+@login_required
+def get_pending_order_count():
+    return jsonify({'count': PendingOrder.query.count()})
+
+@app.route('/sales/pending/<int:id>/complete', methods=['POST'])
+@login_required
+def complete_pending_order(id):
+    """Turn a parked order into a real sales receipt against a named customer.
+
+    Accepts either an existing customer_id, or a `customer` object to create one.
+    The order's own figures (totals, tax, shipping, line items) are used as
+    imported — only the buyer was ever missing.
+    """
+    pending = db.get_or_404(PendingOrder, id)
+    data = request.json or {}
+
+    try:
+        order = json.loads(pending.payload or '{}')
+    except ValueError:
+        return jsonify({'success': False, 'error': 'This pending order is corrupted and '
+                                                   'cannot be completed. Discard it and re-import.'}), 400
+
+    if data.get('customer_id'):
+        customer = db.session.get(Customer, int(data['customer_id']))
+        if not customer:
+            return jsonify({'success': False, 'error': 'That customer no longer exists.'}), 400
+    else:
+        fields, error = _parse_customer_payload(data.get('customer') or {})
+        if error:
+            return jsonify({'success': False, 'error': error}), 400
+        customer = Customer(**fields)
+        db.session.add(customer)
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({'success': False,
+                            'error': f"A customer with the email {fields['email']} already "
+                                     f"exists — pick them from the list instead."}), 409
+
+    # Guard against two tabs completing the same order
+    if find_existing_sale(pending.source, pending.external_order_id, None)[0]:
+        db.session.rollback()
+        return jsonify({'success': False,
+                        'error': 'A sale for this order already exists.'}), 409
+
+    sale = SalesReceipt(customer_id=customer.id)
+    db.session.add(sale)
+
+    # Money and dates come back off the payload as strings via json_safe
+    order['order_total'] = Decimal(str(order.get('order_total', '0')))
+    order['tax_amount'] = Decimal(str(order.get('tax_amount', '0')))
+    order['shipping_amount'] = Decimal(str(order.get('shipping_amount', '0')))
+    if order.get('order_date'):
+        order['order_date'] = datetime.fromisoformat(order['order_date'])
+    if order.get('shipdate'):
+        order['shipdate'] = date.fromisoformat(order['shipdate'])
+
+    apply_order_to_sale(sale, order, pending.source, customer, is_new=True)
+    db.session.flush()
+    sale.receipt_number = str(sale.id)
+    replace_line_items(sale, order.get('items', []))
+
+    db.session.delete(pending)
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f"Could not complete pending order {id}: {e}")
+        return jsonify({'success': False, 'error': 'Could not save the sale.'}), 500
+
+    app.logger.info(f"Completed pending {pending.source} order {pending.external_order_number} "
+                    f"as sale {sale.id}")
+    return jsonify({'success': True, 'id': sale.id,
+                    'message': f'Sale #{sale.id} created for {customer.name}.'})
+
+@app.route('/sales/pending/<int:id>/delete', methods=['POST'])
+@login_required
+def delete_pending_order(id):
+    pending = db.get_or_404(PendingOrder, id)
+    label = pending.external_order_number or pending.external_order_id
+    db.session.delete(pending)
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f"Could not discard pending order {id}: {e}")
+        return jsonify({'success': False, 'error': 'Could not discard this order.'}), 500
+    return jsonify({'success': True, 'message': f'Discarded pending order {label}.'})
 
 @app.route('/sales/print/<int:id>')
 @login_required
@@ -1060,485 +1520,1079 @@ def calculate_tax():
     tax = total * 0.015
     return jsonify({'tax': round(tax, 2)})
 
+def require_integration(model, label):
+    """Return (credentials, None) when an integration is usable, else (None, response)."""
+    credentials = model.query.first()
+    if not credentials:
+        return None, (jsonify({'error': f'{label} credentials have not been saved yet. '
+                                        f'Add them on the Management page.'}), 400)
+    if not credentials.enabled:
+        return None, (jsonify({'error': f'{label} integration is turned off. '
+                                        f'Enable it on the Management page.'}), 400)
+    return credentials, None
+
+def integration_error_detail(response):
+    """Pull the server's own explanation out of an error body, if it gave one.
+
+    Worth the trouble because a 403 usually is not what it looks like: Shopify
+    answers with "[API] This action requires merchant approval for read_orders
+    scope", which is a scope problem, not a credential problem. Repeating our own
+    guess about the API key instead sends the operator to the wrong screen.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return ''
+    if not isinstance(payload, dict):
+        return ''
+    for key in ('errors', 'error_description', 'error', 'message'):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        # WooCommerce and Shopify both also use {"errors": {"field": ["reason"]}}
+        if isinstance(value, dict) and value:
+            return '; '.join(
+                f"{k}: {', '.join(str(v) for v in vs) if isinstance(vs, list) else vs}"
+                for k, vs in value.items())
+        if isinstance(value, list) and value:
+            return '; '.join(str(v) for v in value)
+    return ''
+
+def integration_request(method, url, label, **kwargs):
+    """Call an integration's HTTP API and translate failures into readable errors.
+
+    Auth failures in particular used to surface as a generic 500; the operator
+    needs to know the saved credentials are the problem.
+    """
+    kwargs.setdefault('timeout', 60)
+    try:
+        response = requests.request(method, url, **kwargs)
+    except requests.RequestException as e:
+        app.logger.error(f"{label} request to {url} failed: {e}")
+        raise IntegrationError(f'Could not reach {label}. Check the network connection.')
+
+    if response.status_code in (401, 403):
+        detail = integration_error_detail(response)
+        app.logger.error(f"{label} refused the request ({response.status_code}) for {url}: "
+                         f"{response.text[:500]}")
+        if detail:
+            raise IntegrationError(f'{label} refused the request ({response.status_code}): {detail}')
+        raise IntegrationError(f'{label} rejected the saved credentials. '
+                               f'Check the API key/secret on the Management page.')
+    if response.status_code == 429:
+        raise IntegrationError(f'{label} is rate limiting us. Try a smaller date range.')
+    if not response.ok:
+        app.logger.error(f"{label} returned {response.status_code} for {url}: {response.text[:500]}")
+        raise IntegrationError(f'{label} returned an error ({response.status_code}).')
+    return response
+
+class IntegrationError(Exception):
+    """A user-facing failure talking to an external order source."""
+
+def json_safe(value):
+    """Serialise Decimals, dates and datetimes for storage in a JSON column."""
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f'Not JSON serialisable: {type(value)!r}')
+
+def upsert_pending_order(order, source):
+    """Park an order whose buyer details the platform withheld.
+
+    No SalesReceipt and no customer record are created. A half-identified sale
+    would be worse than none: `get_state_info` cannot classify an address with no
+    city or ZIP, so it would silently land in the 'Unknown' bucket and understate
+    the WA totals with nothing to show that it had happened.
+
+    Re-imports update the parked row in place rather than stacking duplicates.
+    """
+    external_order_id = str(order.get('external_order_id') or '')
+    pending = PendingOrder.query.filter_by(
+        source=source, external_order_id=external_order_id).first()
+    if pending is None:
+        pending = PendingOrder(source=source, external_order_id=external_order_id)
+        db.session.add(pending)
+        created = True
+    else:
+        created = False
+
+    pending.external_order_number = str(order.get('external_order_number') or '')
+    pending.order_date = order.get('order_date')
+    pending.total = float(order.get('order_total') or 0)
+    pending.tax = float(order.get('tax_amount') or 0)
+    pending.shipping = float(order.get('shipping_amount') or 0)
+    pending.shipservice = order.get('shipservice')
+    pending.tracking = order.get('tracking')
+    pending.shipdate = order.get('shipdate')
+    pending.customer_notes = order.get('customer_notes') or ''
+    pending.internal_notes = order.get('internal_notes') or ''
+    # Everything needed to build the receipt later, including whatever partial
+    # location hints the platform did share
+    pending.payload = json.dumps(order, default=json_safe)
+    db.session.flush()
+    return created
+
+# How far a hand-entered date may sit from the platform's before the two stop
+# being plausibly the same order. A day absorbs a timezone-edge or a date typed
+# from a UTC-displayed admin screen without letting unrelated orders match.
+UNCLAIMED_MATCH_WINDOW = timedelta(days=1)
+
+def normalise_order_number(value):
+    """Compare order numbers the way a person would: '#1797', '1797 ' are one."""
+    return str(value or '').strip().lstrip('#').strip()
+
+def _order_numbers_agree(left, right):
+    left, right = normalise_order_number(left), normalise_order_number(right)
+    return bool(left) and left == right
+
+def find_unclaimed_sale(external_order_number, order_date):
+    """Find a hand-entered receipt that is plainly this same order, or None.
+
+    An operator who enters a store order themselves puts its order number in
+    external_order_number and leaves external_order_id empty, so the reliable key
+    below cannot see it and the import would write a second receipt for a sale
+    already on the books — then ask for a customer it already has.
+
+    The order number alone is not enough to match on: it is not unique in the
+    live data, and other platforms number orders in the same ranges. Requiring
+    the dates to agree too makes a collision implausible — two different orders
+    sharing a number *and* a day. Precision is what matters here: a missed match
+    only produces the duplicate we already get today, which is visible and easy
+    to delete, whereas a wrong match silently welds two unrelated sales together.
+
+    Only unclaimed receipts qualify. Anything already carrying an
+    external_order_id belongs to an importer and is found by the reliable key.
+    """
+    if not order_date:
+        return None
+    number = normalise_order_number(external_order_number)
+    if not number:
+        return None
+
+    candidates = SalesReceipt.query.filter(
+        SalesReceipt.external_order_id.is_(None),
+        db.or_(SalesReceipt.source.is_(None), SalesReceipt.source == 'manual'),
+        # Live rows carry stray whitespace, and stores differ on the '#' prefix
+        db.or_(func.trim(SalesReceipt.external_order_number) == number,
+               func.trim(SalesReceipt.external_order_number) == f'#{number}'),
+    ).all()
+
+    for sale in candidates:
+        if sale.date and abs(sale.date - order_date) <= UNCLAIMED_MATCH_WINDOW:
+            return sale
+    return None
+
+def find_existing_sale(source, external_order_id, external_order_number, order_date=None):
+    """Find the receipt an imported order belongs to. Returns (sale, adopted).
+
+    Matching is on (source, external_order_id) — the only pair guaranteed unique
+    per platform. The platform's order number alone is not: imported rows hold the
+    number while hand-entered rows hold their own receipt id, and the live data
+    already contains duplicates. The legacy fallback is kept only for rows
+    imported before `source` existed, and those rows get stamped on first match so
+    the reliable key applies from then on.
+
+    `adopted` means the receipt was typed in by hand and merely recognised as this
+    order, rather than written by an importer. That has to survive every later
+    import, not just the one that spotted it, so an adopted receipt keeps
+    source='manual' and is re-identified by tier 2 below on each subsequent run.
+    Stamping it 'shopify' would make the next import treat it as its own and
+    overwrite the operator's figures — the exact cleanup this matching avoids.
+    """
+    if external_order_id:
+        sale = SalesReceipt.query.filter_by(
+            source=source, external_order_id=str(external_order_id)).first()
+        if sale:
+            return sale, False
+
+        # A hand-entered receipt adopted by an earlier run. The order number must
+        # agree as well, so an id from another platform that happens to be
+        # numerically equal cannot claim it.
+        sale = SalesReceipt.query.filter(
+            SalesReceipt.source == 'manual',
+            SalesReceipt.external_order_id == str(external_order_id),
+        ).first()
+        if sale and _order_numbers_agree(sale.external_order_number, external_order_number):
+            return sale, True
+
+    if external_order_number:
+        # Legacy rows stored the marketplace number in what is now
+        # receipt_number; that is the only reason to look there.
+        sale = SalesReceipt.query.filter(
+            SalesReceipt.source.is_(None),
+            SalesReceipt.receipt_number == str(external_order_number)
+        ).first()
+        if sale:
+            return sale, False
+
+    sale = find_unclaimed_sale(external_order_number, order_date)
+    return (sale, True) if sale else (None, False)
+
+def apply_order_to_sale(sale, order, source, customer, is_new, adopted=False):
+    """Copy a processed order's header fields onto a receipt.
+
+    Three identifiers, three distinct jobs — they had drifted into each other:
+      * receipt_number        Sales Tracker's own receipt number. Set to the
+                              receipt's id once it has one (see
+                              import_processed_orders), matching what add_sale
+                              does. Never the marketplace's number.
+      * external_order_number the marketplace/platform order number, shown as
+                              "Order #". Display only.
+      * external_order_id     the platform's internal order id, used solely as
+                              the duplicate-detection key.
+
+    Deliberately excluded on re-import:
+      * customer_id — reassigning it would undo a manual customer merge
+      * line items  — they may have been corrected by hand; only new receipts
+                      get them built (see import_processed_orders)
+
+    `adopted` means this receipt was entered by hand and has been recognised as
+    the platform's order (see find_unclaimed_sale). We link it, so it can never be
+    imported twice, but leave the operator's own figures exactly as typed: they
+    may already account for a discount or a refund the API still reports at face
+    value, and overwriting them would be the silent cleanup job this matching
+    exists to avoid. Blanks are still filled in. `source` deliberately stays
+    'manual' — it is what marks the receipt as the operator's on every later run.
+    """
+    if is_new:
+        sale.customer_id = customer.id
+    if adopted:
+        # Rows predating the column have source NULL. Naming them for what they
+        # are is what lets the next run recognise them as the operator's instead
+        # of importing the order a second time.
+        sale.source = sale.source or 'manual'
+    else:
+        sale.source = source
+    sale.external_order_id = str(order['external_order_id']) if order.get('external_order_id') else None
+    if order.get('external_order_number'):
+        sale.external_order_number = str(order['external_order_number'])
+
+    if not adopted:
+        if order.get('order_date'):
+            sale.date = order['order_date']
+        sale.total = order['order_total']
+        sale.tax = order['tax_amount']
+        sale.shipping = order['shipping_amount']
+
+    for field in ('shipservice', 'tracking', 'shipdate'):
+        if order.get(field) is None:
+            continue
+        if adopted and getattr(sale, field):
+            continue  # what the operator recorded wins
+        setattr(sale, field, order[field])
+
+    if adopted:
+        # Say what actually happened; 'Imported from Shopify' would be a lie on a
+        # receipt someone typed, and the operator needs to see why it now carries
+        # an order id it did not have yesterday.
+        order = dict(order, internal_notes=(
+            f"Matched to {source} order {order.get('external_order_number')} on import. "
+            f"Totals left as entered."))
+
+    # Notes are appended rather than replaced so hand-written context survives
+    for field in ('customer_notes', 'internal_notes'):
+        incoming = (order.get(field) or '').strip()
+        if not incoming:
+            continue
+        existing = (getattr(sale, field) or '').strip()
+        if not existing:
+            setattr(sale, field, incoming)
+        elif incoming not in existing:
+            setattr(sale, field, f"{existing}\n{incoming}")
+
+class ImportResult(namedtuple('ImportResult', 'created updated adopted errors pending')):
+    """What one import run did. `adopted` counts sales that already existed by
+    hand and were linked to the platform instead of being duplicated."""
+    __slots__ = ()
+
+def discard_pending_order(source, external_order_id):
+    """Drop a parked order once a receipt exists for it.
+
+    An order can be parked for missing buyer details and then entered by hand
+    before the next import. Without this the queue keeps asking for a sale that
+    is already on the books.
+    """
+    if not external_order_id:
+        return
+    stale = PendingOrder.query.filter_by(
+        source=source, external_order_id=str(external_order_id)).first()
+    if stale:
+        db.session.delete(stale)
+
+def import_processed_orders(processed_orders, source, enrich=None):
+    """Persist processed orders, one savepoint per order. Returns an ImportResult.
+
+    Everything runs on db.session. The old code wrote sales on a raw Session()
+    while get_or_create_customer/_product wrote db.session and never committed it,
+    so an imported sale could commit while the customer row it pointed at was
+    rolled back. With foreign keys now enforced that would be a hard failure
+    rather than a silent orphan.
+
+    A failing order rolls back only its own savepoint and is reported in errors[];
+    the rest of the batch still commits. Previously one bad order called
+    session.rollback() and discarded everything processed before it.
+    """
+    created = updated = adopted_count = pending = 0
+    errors = []
+
+    for order in processed_orders:
+        label = order.get('external_order_number') or order.get('external_order_id') or 'unknown'
+        try:
+            with db.session.begin_nested():
+                if enrich:
+                    enrich(order)
+
+                existing, adopted = find_existing_sale(
+                    source, order.get('external_order_id'),
+                    order.get('external_order_number'), order.get('order_date'))
+
+                # No buyer details and no receipt yet — park it for manual entry
+                # instead of inventing a customer. If a receipt already exists,
+                # the details were supplied once and the header still updates.
+                if order.get('customer_data_unavailable') and existing is None:
+                    if upsert_pending_order(order, source):
+                        pending += 1
+                    continue
+
+                if existing is not None:
+                    discard_pending_order(source, order.get('external_order_id'))
+
+                sale = existing
+                is_new = sale is None
+                if is_new:
+                    # Resolve a customer only when one is actually needed. On an
+                    # existing receipt apply_order_to_sale never reassigns
+                    # customer_id, so doing this unconditionally just stranded a
+                    # new Customer row — every time, for orders with no email,
+                    # since those get a fresh placeholder address each run.
+                    customer = get_or_create_customer(order['customer'])
+                    sale = SalesReceipt(customer_id=customer.id)
+                    db.session.add(sale)
+                else:
+                    customer = sale.customer
+
+                apply_order_to_sale(sale, order, source, customer, is_new, adopted)
+                db.session.flush()
+
+                if is_new:
+                    # The receipt number is Sales Tracker's own identifier, not a
+                    # second copy of the marketplace order number. add_sale uses
+                    # the same rule for hand-entered sales.
+                    sale.receipt_number = str(sale.id)
+                    replace_line_items(sale, order['items'])
+                    created += 1
+                elif adopted:
+                    app.logger.info(
+                        f"Linked {source} order {label} to hand-entered receipt "
+                        f"{sale.receipt_number} instead of creating a duplicate")
+                    adopted_count += 1
+                else:
+                    updated += 1
+        except Exception as e:
+            message = f"Order {label}: {e}"
+            app.logger.error(f"Error importing {source} order {label}: {e}", exc_info=True)
+            errors.append(message)
+            continue
+
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f"Could not commit {source} import: {e}")
+        raise IntegrationError('Import could not be saved to the database.')
+
+    return ImportResult(created, updated, adopted_count, errors, pending)
+
+def import_response(source_label, result):
+    message = (f'{source_label} import finished. '
+               f'Created {result.created} new orders. Updated {result.updated} existing orders.')
+    if result.adopted:
+        message += (f' {result.adopted} order(s) you had already entered by hand were '
+                    f'matched to {source_label} rather than duplicated.')
+    if result.pending:
+        message += (f' {result.pending} order(s) are awaiting customer details — '
+                    f'the store withheld them. Open Pending Orders to complete them.')
+    if result.errors:
+        message += f' {len(result.errors)} order(s) could not be imported.'
+    status = 200 if not (result.errors or result.pending) else 207
+    return jsonify({'message': message, 'errors': result.errors,
+                    'adopted': result.adopted, 'pending': result.pending}), status
+
+def shipstation_order_id_for(sale):
+    """Best available ShipStation orderId for a receipt.
+
+    New imports store it in external_order_id. Rows imported by older versions
+    used the ShipStation orderId as the receipt's own primary key, which is why
+    `id` is the fallback — external_order_number holds the marketplace order
+    number on those rows, not the orderId.
+    """
+    return sale.external_order_id or str(sale.id)
+
+def shipstation_get_shipment(credentials, order_id):
+    """Fetch an order's shipments. Raises IntegrationError; never returns a Response."""
+    response = integration_request(
+        'GET', 'https://ssapi.shipstation.com/shipments', 'ShipStation',
+        params={'orderId': order_id, 'includeShipmentItems': True},
+        auth=(credentials.api_key, credentials.api_secret))
+    return response.json()
+
+def shipment_fields(shipment_payload):
+    """Pull carrier/tracking/ship date out of a ShipStation shipments response."""
+    shipments = (shipment_payload or {}).get('shipments') or []
+    if not shipments:
+        return {}
+    shipment = shipments[0]
+    fields = {}
+    service_code = shipment.get('serviceCode') or ''
+    if service_code:
+        # "usps_priority_mail" -> "USPS"
+        fields['shipservice'] = service_code.split('_')[0].upper()
+    if shipment.get('trackingNumber'):
+        fields['tracking'] = shipment['trackingNumber']
+    if shipment.get('shipDate'):
+        try:
+            fields['shipdate'] = datetime.strptime(shipment['shipDate'], '%Y-%m-%d').date()
+        except ValueError:
+            app.logger.warning(f"Unparseable ShipStation shipDate: {shipment['shipDate']!r}")
+    return fields
+
 @app.route('/shipstation/fetch_orders', methods=['POST'])
 @login_required
 @retry_on_db_lock()
 def fetch_shipstation_orders():
-    credentials = ShipStationCredentials.query.first()
-    if not credentials:
-        return jsonify({'error': 'ShipStation credentials not found'}), 400
-    
+    credentials, error = require_integration(ShipStationCredentials, 'ShipStation')
+    if error:
+        return error
+
     start_date = request.form.get('start_date')
     end_date = request.form.get('end_date')
-    
     if not start_date or not end_date:
         return jsonify({'error': 'Start date and end date are required'}), 400
-    
-    api_url = 'https://ssapi.shipstation.com/orders'
-    
+
     all_orders = []
     page = 1
-    page_size = 500  # Maximum allowed by ShipStation API
-
-    while True:
-        params = {
-            'orderDateStart': start_date,
-            'orderDateEnd': end_date,
-            'orderStatus': 'shipped',
-            'pageSize': page_size,
-            'page': page
-        }
-        
-        try:
-            response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
-            response.raise_for_status()
+    try:
+        while True:
+            response = integration_request(
+                'GET', 'https://ssapi.shipstation.com/orders', 'ShipStation',
+                params={
+                    'orderDateStart': start_date,
+                    'orderDateEnd': end_date,
+                    'orderStatus': 'shipped',
+                    'pageSize': 500,  # Maximum allowed by ShipStation
+                    'page': page,
+                },
+                auth=(credentials.api_key, credentials.api_secret))
             data = response.json()
-            
-            orders = data.get('orders', [])
-            all_orders.extend(orders)
-            
-            total_pages = data.get('pages', 1)
-            if page >= total_pages:
+            all_orders.extend(data.get('orders', []))
+            if page >= data.get('pages', 1):
                 break
-            
             page += 1
-        except requests.RequestException as e:
-            app.logger.error(f"Error fetching orders from ShipStation: {str(e)}")
-            return jsonify({'error': 'Error fetching orders from ShipStation'}), 500
+    except IntegrationError as e:
+        return jsonify({'error': str(e)}), 502
 
-    orders_created = 0
-    orders_updated = 0
-    customers_created = 0
-    customers_updated = 0
-    errors = []
-
-    Session = db.session.session_factory
-    session = Session()
+    def attach_shipment(order):
+        """Per-order shipment lookup, run inside that order's savepoint so a
+        failure here only skips this one order."""
+        order.update(shipment_fields(
+            shipstation_get_shipment(credentials, order['external_order_id'])))
 
     try:
-        processed_orders = process_shipstation_data(all_orders)
-        
-        for order in processed_orders:
-            try:
-                with session.begin_nested():
-                    customer = get_or_create_customer(order['customer'])
-                    shipment = fetch_shipstation_shipment(order['order_id'], internal_call=True)
-                    
-                    serviceCodeParts = shipment['shipments'][0]['serviceCode'].split('_')
-                    serviceCodeParts[0] = serviceCodeParts[0].upper()
-                    
-                    existing_sale = session.query(SalesReceipt).filter_by(
-                        order_number=order['order_number']
-                        #shipstation_order_id=order['sales_receipt_number'] # TODO: We'll need to update this to match based on the correct item
-                    ).first()
-
-                    if existing_sale:
-                        existing_sale.shipstation_order_id = order['shipstation_order_id']
-                        existing_sale.order_number = order['order_number']
-                        existing_sale.shipservice = serviceCodeParts[0]
-                        existing_sale.tracking = shipment['shipments'][0]['trackingNumber']
-                        existing_sale.shipdate = datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date()
-                        #existing_sale.customer_id = customer.id
-                        #existing_sale.date = order['sales_receipt_date']
-                        #existing_sale.total = order['order_total']
-                        #existing_sale.tax = order['tax_amount']
-                        #existing_sale.shipping = order['shipping_amount']
-                        existing_sale.customer_note = order['customer_notes']
-                        existing_sale.internal_note = order['internal_notes']
-                        orders_updated += 1
-                    else:
-                        # Create a new sale
-                        new_sale = SalesReceipt(
-                            customer_id=customer.id,
-                            shipstation_order_id=order['shipstation_order_id'],
-                            order_number=order['order_number'],
-                            shipservice=serviceCodeParts[0],
-                            tracking=shipment['shipments'][0]['trackingNumber'],
-                            shipdate=datetime.strptime(shipment['shipments'][0]['shipDate'], '%Y-%m-%d').date(),
-                            date=order['sales_receipt_date'],
-                            total=order['order_total'],
-                            tax=order['tax_amount'],
-                            shipping=order['shipping_amount'],
-                            customer_notes=order['customer_notes'],
-                            internal_notes=order['internal_notes']
-                        )
-                        session.add(new_sale)
-                        session.flush()
-                        orders_created += 1
-                
-                # Process line items
-                sale = existing_sale or new_sale
-                process_line_items(sale, order['items'], session)
-
-            except Exception as e:
-                session.rollback()
-                error_msg = f"1010: Error processing order {order['order_id']}: {str(e)}"
-                app.logger.error(error_msg)
-                errors.append(error_msg)
-                continue
-
-        session.commit()
-        
-    except Exception as e:
-        session.rollback()
+        result = import_processed_orders(
+            process_shipstation_data(all_orders), 'shipstation', enrich=attach_shipment)
+    except IntegrationError as e:
         return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
 
-    message = (f'Successfully processed orders. '
-               f'Created {orders_created} new orders. '
-               f'Updated {orders_updated} existing orders.')
-    if errors:
-        message += f' Encountered {len(errors)} errors.'
-    
-    return jsonify({
-        'message': message,
-        'errors': errors
-    }), 200 if not errors else 207
+    return import_response('ShipStation', result)
 
-@app.route('/shipstation/fetch_shipment/<int:id>')
+@app.route('/shipstation/fetch_shipment/<int:id>', methods=['POST'])
 @login_required
-def fetch_shipstation_shipment(id, internal_call=False):
-    credentials = ShipStationCredentials.query.first()
-    if not credentials:
-        return jsonify({'error': 'ShipStation credentials not found'}), 400
-    
-    orderId = id
-    
-    if not orderId:
-        return jsonify({'error': 'Order IDs are required'}), 400
-    
-    api_url = 'https://ssapi.shipstation.com/shipments'
+def fetch_shipstation_shipment(id):
+    credentials, error = require_integration(ShipStationCredentials, 'ShipStation')
+    if error:
+        return error
+    try:
+        return jsonify(shipstation_get_shipment(credentials, id)), 200
+    except IntegrationError as e:
+        return jsonify({'error': str(e)}), 502
 
-    while True:
-        params = {
-            'orderId': orderId,
-            'includeShipmentItems': True
-        }
-        
-        try:
-            response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
-            response.raise_for_status()
-            shipments = response.json()
-            
-            #shipments = data.get('shipments', [])
-            return (jsonify(shipments), 200) if not internal_call else (shipments)
-            
-        except requests.RequestException as e:
-            app.logger.error(f"Error fetching shipments from ShipStation: {str(e)}")
-            return jsonify({'error': 'Error fetching shipments from ShipStation'}), 500
-
-@app.route('/shipstation/update_shipment/<int:id>')
+@app.route('/shipstation/update_shipment/<int:id>', methods=['POST'])
 @login_required
 def update_shipment(id):
-    credentials = ShipStationCredentials.query.first()
-    if not credentials:
-        return jsonify({'error': 'ShipStation credentials not found'}), 400
-    
-    orderId = id
-    errors = []
-    
-    # Call the function to update just the notes since it uses a different URL but we want to update everything at the same time
-    update_notes(orderId)
+    """Refresh one receipt's carrier/tracking/ship date and notes from ShipStation."""
+    credentials, error = require_integration(ShipStationCredentials, 'ShipStation')
+    if error:
+        return error
 
-    if not orderId:
-        return jsonify({'error': 'Order IDs are required'}), 400
-    
-    api_url = 'https://ssapi.shipstation.com/shipments'
+    sale = db.get_or_404(SalesReceipt, id)
+    order_id = shipstation_order_id_for(sale)
 
-    params = {
-        'orderId': orderId,
-        'includeShipmentItems': True
+    try:
+        fields = shipment_fields(shipstation_get_shipment(credentials, order_id))
+        if not fields:
+            return jsonify({'error': f'ShipStation has no shipment for order {order_id}.'}), 404
+        notes = shipstation_order_notes(credentials, order_id)
+    except IntegrationError as e:
+        return jsonify({'error': str(e)}), 502
+
+    for field, value in fields.items():
+        setattr(sale, field, value)
+    apply_incoming_notes(sale, notes)
+
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f"Error saving ShipStation update for sale {id}: {e}")
+        return jsonify({'error': 'Could not save the update.'}), 500
+
+    app.logger.info(f"Updated sale {id} from ShipStation order {order_id}")
+    return jsonify({'success': True, 'message': f'Sale #{id} updated from ShipStation.'})
+
+def shipstation_order_notes(credentials, order_id):
+    """Fetch customer/internal notes for a ShipStation order."""
+    response = integration_request(
+        'GET', f'https://ssapi.shipstation.com/orders/{order_id}', 'ShipStation',
+        auth=(credentials.api_key, credentials.api_secret))
+    order = response.json()
+    return {
+        'customer_notes': order.get('customerNotes') or '',
+        'internal_notes': order.get('internalNotes') or '',
     }
-    
-    try:
-        response = requests.get(api_url, params=params, auth=(credentials.api_key, credentials.api_secret))
-        response.raise_for_status()
-        shipments = response.json()
-        if not shipments.get('shipments'):
-            return view_sale(id), 404
 
-    except requests.RequestException as e:
-        app.logger.error(f"Error fetching shipments from ShipStation: {str(e)}")
-        return jsonify({'error': 'Error fetching shipments from ShipStation'}), 500
-    
-    try:
-        with db.session.begin_nested():           
-            # Split serviceCode into parts so we can get the carrier only
-            serviceCodeParts = shipments['shipments'][0]['serviceCode'].split('_')
-            # Capitalize the first part
-            serviceCodeParts[0] = serviceCodeParts[0].upper()
-            sale = SalesReceipt.query.filter_by(id=id).first()
-
-            # Update sale
-            sale.shipservice = serviceCodeParts[0]
-            sale.tracking = shipments['shipments'][0]['trackingNumber']
-            sale.shipdate = datetime.strptime(shipments['shipments'][0]['shipDate'], '%Y-%m-%d').date()
-            sale.shipstation_order_id = shipments['shipments'][0]['orderId']
-            sale.order_number = shipments['shipments'][0]['orderNumber']
-
-    except Exception as e:
-        db.session.rollback()
-        error_msg = f"1117: Error processing order {id}: {str(e)}"
-        app.logger.error(error_msg)
-        errors.append(error_msg)
-
-    try:
-        db.session.commit()
-        message = (f'Successfully updated order {id}.')
-        if errors:
-            message += f' Encountered {len(errors)} errors.'
-        
-        app.logger.info(message)
-        return view_sale(id), 200 if not errors else 207  # Use 207 Multi-Status if there were some errors
-    
-    except IntegrityError as e:
-        db.session.rollback()
-        error_msg = f'Error committing changes to database: {str(e)}'
-        app.logger.error(error_msg)
-        return jsonify({'error': error_msg}), 500
-
-@app.route('/shipstation/update_notes/<int:id>')
-@login_required
-def update_notes(id):
-    credentials = ShipStationCredentials.query.first()
-    if not credentials:
-        return jsonify({'error': 'ShipStation credentials not found'}), 400
-    
-    orderId = SalesReceipt.query.filter_by(id=id).first().shipstation_order_id
-    errors = []
-    
-    if not orderId:
-        return jsonify({'error': 'Order IDs are required'}), 400
-    
-    api_url = f'https://ssapi.shipstation.com/orders/{orderId}'
-    
-    try:
-        response = requests.get(api_url, auth=(credentials.api_key, credentials.api_secret))
-        response.raise_for_status()
-        orders = response.json()
-        if not orders.get('orderId'):
-            return view_sale(id), 404
-
-    except requests.RequestException as e:
-        app.logger.error(f"Error fetching order info from ShipStation: {str(e)}")
-        return jsonify({'error': 'Error fetching order info from ShipStation'}), 500
-    
-    try:
-        with db.session.begin_nested():           
-            sale = SalesReceipt.query.filter_by(id=id).first()
-            
-            # Update sale
-            
-            # Existing notes
-            existing_customer_notes = sale.customer_notes or ""
-            existing_internal_notes = sale.internal_notes or ""
-
-            # New notes from ShipStation
-            new_customer_notes = orders.get("customerNotes", "")
-            new_internal_notes = orders.get("internalNotes", "")
-
-            # For customer notes:
-            # 1. Check if new_customer_notes is not empty
-            # 2. Check if existing_customer_notes does not contain the new_customer_notes
-            # 3. Append if needed
-            if new_customer_notes and new_customer_notes not in existing_customer_notes:
-                if existing_customer_notes:
-                    sale.customer_notes = existing_customer_notes + "\n" + new_customer_notes
-                else:
-                    sale.customer_notes = new_customer_notes
-
-            # For internal notes, do the same checks
-            if new_internal_notes and new_internal_notes not in existing_internal_notes:
-                if existing_internal_notes:
-                    sale.internal_notes = existing_internal_notes + "\n" + new_internal_notes
-                else:
-                    sale.internal_notes = new_internal_notes
-
-    except Exception as e:
-        db.session.rollback()
-        error_msg = f"1195: Error processing order {id}: {str(e)}"
-        app.logger.error(error_msg)
-        errors.append(error_msg)
-
-    try:
-        db.session.commit()
-        message = (f'Successfully updated order {id}.')
-        if errors:
-            message += f' Encountered {len(errors)} errors.'
-        
-        app.logger.info(message)
-        return view_sale(id), 200 if not errors else 207  # Use 207 Multi-Status if there were some errors
-    
-    except IntegrityError as e:
-        db.session.rollback()
-        error_msg = f'Error committing changes to database: {str(e)}'
-        app.logger.error(error_msg)
-        return jsonify({'error': error_msg}), 500
+def apply_incoming_notes(sale, notes):
+    """Append notes that aren't already present, leaving hand-written text intact."""
+    for field in ('customer_notes', 'internal_notes'):
+        incoming = (notes.get(field) or '').strip()
+        if not incoming:
+            continue
+        existing = (getattr(sale, field) or '').strip()
+        if not existing:
+            setattr(sale, field, incoming)
+        elif incoming not in existing:
+            setattr(sale, field, f"{existing}\n{incoming}")
 
 @app.route('/shippo/fetch_orders', methods=['POST'])
 @login_required
 @retry_on_db_lock()
 def fetch_shippo_orders():
-    credentials = ShippoCredentials.query.first()
-    if not credentials:
-        return jsonify({'error': 'Shippo credentials not found'}), 400
-    
+    credentials, error = require_integration(ShippoCredentials, 'Shippo')
+    if error:
+        return error
+
     start_date = request.form.get('start_date')
     end_date = request.form.get('end_date')
-    
     if not start_date or not end_date:
         return jsonify({'error': 'Start date and end date are required'}), 400
-    
-    # Convert dates to correct format for Shippo API
+
     try:
-        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-        # Format as required by Shippo API (YYYY-MM-DDTHH:MM:SS)
-        start_formatted = start_dt.strftime('%Y-%m-%dT00:00:00')
-        end_formatted = end_dt.strftime('%Y-%m-%dT23:59:59')
+        start_formatted = datetime.strptime(start_date, '%Y-%m-%d').strftime('%Y-%m-%dT00:00:00')
+        end_formatted = datetime.strptime(end_date, '%Y-%m-%d').strftime('%Y-%m-%dT23:59:59')
     except ValueError:
         return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
-    
-    api_url = 'https://api.goshippo.com/orders'
-    
-    all_orders = []
-    page = 1
-    results_per_page = 25  # Shippo default is 25
-    
+
     headers = {
         'Authorization': f'ShippoToken {credentials.api_key}',
         'Content-Type': 'application/json'
     }
 
-    while True:
-        # Use correct Shippo API parameters
-        params = {
-            'results': results_per_page,
-            'page': page,
-            'start_date': start_formatted,
-            'end_date': end_formatted,
-            'order_status[]': 'SHIPPED'  # Correct array notation
-        }
-        
-        try:
-            response = requests.get(api_url, params=params, headers=headers)
-            response.raise_for_status()
+    all_orders = []
+    page = 1
+    try:
+        while True:
+            response = integration_request(
+                'GET', 'https://api.goshippo.com/orders', 'Shippo',
+                params={
+                    'results': 25,  # Shippo's page size
+                    'page': page,
+                    'start_date': start_formatted,
+                    'end_date': end_formatted,
+                    'order_status[]': 'SHIPPED',
+                },
+                headers=headers)
             data = response.json()
-
-            app.logger.info(f"API URL: {api_url}")
-            app.logger.info(f"API params: {params}")
-            app.logger.info(f"Response status: {response.status_code}")
-            app.logger.info(f"Response content: {data}")
-            
-            orders = data.get('results', [])
-            all_orders.extend(orders)
-            
-            # Check if there are more pages
+            # Bodies are not logged: Shippo order payloads carry customer names,
+            # addresses and phone numbers, which do not belong in an INFO log
+            app.logger.info(f"Shippo page {page}: {len(data.get('results', []))} order(s)")
+            all_orders.extend(data.get('results', []))
             if not data.get('next'):
                 break
-                
             page += 1
-        except requests.RequestException as e:
-            app.logger.error(f"Error fetching orders from Shippo: {str(e)}")
-            return jsonify({'error': 'Error fetching orders from Shippo'}), 500
+    except IntegrationError as e:
+        return jsonify({'error': str(e)}), 502
 
-    # If still no orders, try a broader search without filters
     if not all_orders:
-        app.logger.info("No orders found with filters, trying without date/status filters...")
-        try:
-            params_simple = {
-                'results': 25,
-                'page': 1
-            }
-            response = requests.get(api_url, params=params_simple, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            
-            app.logger.info(f"Simple query results: {data}")
-            
-            if not data.get('results'):
-                return jsonify({
-                    'message': 'No orders found in Shippo. Orders are typically created when you generate shipping labels or connect an e-commerce platform.',
-                    'suggestion': 'Try creating a test order first or check if your e-commerce platform is connected.'
-                })
-                
-        except requests.RequestException as e:
-            app.logger.error(f"Error in simple query: {str(e)}")
-
-    orders_created = 0
-    orders_updated = 0
-    errors = []
-
-    Session = db.session.session_factory
-    session = Session()
+        return jsonify({
+            'message': 'No shipped Shippo orders in that date range. Shippo creates '
+                       'orders when you buy a label or connect a storefront.',
+            'errors': []
+        }), 200
 
     try:
-        processed_orders = process_shippo_data(all_orders)
-        
-        for order in processed_orders:
-            try:
-                with session.begin_nested():
-                    customer = get_or_create_customer(order['customer'])
-                    
-                    existing_sale = session.query(SalesReceipt).filter_by(
-                        order_number=order['order_number']
-                    ).first()
+        result = import_processed_orders(
+            process_shippo_data(all_orders), 'shippo')
+    except IntegrationError as e:
+        return jsonify({'error': str(e)}), 500
 
-                    if existing_sale:
-                        existing_sale.customer_id = customer.id
-                        existing_sale.date = order['order_date']
-                        existing_sale.total = order['order_total']
-                        existing_sale.tax = order['tax_amount']
-                        existing_sale.shipping = order['shipping_amount']
-                        existing_sale.customer_notes = order.get('customer_notes', '')
-                        existing_sale.internal_notes = order.get('internal_notes', '')
-                        orders_updated += 1
-                    else:
-                        new_sale = SalesReceipt(
-                            customer_id=customer.id,
-                            shipstation_order_id=order['order_id'],
-                            order_number=order['order_number'],
-                            date=order['order_date'],
-                            total=order['order_total'],
-                            tax=order['tax_amount'],
-                            shipping=order['shipping_amount'],
-                            customer_notes=order.get('customer_notes', ''),
-                            internal_notes=order.get('internal_notes', '')
-                        )
-                        session.add(new_sale)
-                        session.flush()
-                        orders_created += 1
-                
-                # Process line items
-                sale = existing_sale or new_sale
-                process_line_items(sale, order['items'], session)
+    return import_response('Shippo', result)
 
-            except Exception as e:
-                session.rollback()
-                error_msg = f"Error processing order {order['order_number']}: {str(e)}"
-                app.logger.error(error_msg)
-                errors.append(error_msg)
+@app.route('/woocommerce/fetch_orders', methods=['POST'])
+@login_required
+def fetch_woocommerce_orders():
+    """Placeholder so enabling WooCommerce gives a clear answer instead of a 404.
+
+    The importer itself is still to be written (roadmap E5).
+    """
+    credentials, error = require_integration(WooCommerceCredentials, 'WooCommerce')
+    if error:
+        return error
+    return jsonify({
+        'error': 'The WooCommerce importer has not been built yet. '
+                 'Credentials are saved and the connection is ready for it.'
+    }), 501
+
+# ---------------------------------------------------------------------------
+# Shopify
+#
+# Two ways in, sharing one import path:
+#   * POST /shopify/fetch_orders — operator picks a date range, we page the Admin
+#     REST API. Works from a LAN-only box, and is the backfill/repair tool.
+#   * POST /shopify/webhook      — Shopify pushes orders/create|updated|fulfilled
+#     as they happen. Needs a public HTTPS URL and verifies every request's HMAC.
+#
+# Both land in import_processed_orders keyed on (source='shopify', order id), so a
+# webhook and a later manual fetch of the same order update one receipt rather
+# than creating two. See integrations-shopify.md for setup and trade-offs.
+# ---------------------------------------------------------------------------
+
+# Shopify supports each dated version for 12 months; bump this periodically.
+SHOPIFY_API_VERSION = os.environ.get('SHOPIFY_API_VERSION', '2026-01')
+
+# Environment variables that stand in for stored credentials, in priority order.
+# Set any of these (typically via .env) and it wins over the database value, so a
+# development machine never has to paste secrets into the Management page.
+SHOPIFY_ENV_FIELDS = {
+    'shop_domain': ('SHOPIFY_SHOP_DOMAIN', 'SHOPIFY_STORE_DOMAIN'),
+    'api_key': ('SHOPIFY_ADMIN_API_TOKEN', 'SHOPIFY_ACCESS_TOKEN'),
+    'api_secret': ('SHOPIFY_API_SECRET',),
+    'client_id': ('SHOPIFY_CLIENT_ID',),
+    'client_secret': ('SHOPIFY_CLIENT_SECRET', 'SHOPIFY_SECRET'),
+}
+
+def shopify_env_value(field):
+    for name in SHOPIFY_ENV_FIELDS.get(field, ()):
+        value = (os.environ.get(name) or '').strip()
+        if value:
+            return value
+    return ''
+
+def shopify_setting(credentials, field):
+    """Resolve one credential field: environment first, then the database."""
+    return shopify_env_value(field) or (getattr(credentials, field, '') or '').strip()
+
+def shopify_auth_mode(credentials):
+    """Which authentication route to use.
+
+    An explicit choice in the database wins. Otherwise infer it: a client id and
+    secret mean the Dev Dashboard route, a bare access token means the legacy
+    custom app. This keeps a .env that only defines SHOPIFY_CLIENT_ID/SECRET
+    working without anyone having to pick a mode in the UI first.
+    """
+    stored = (credentials.auth_mode or '').strip()
+    if stored in ('token', 'client_credentials'):
+        # An env-supplied client id still overrides a stale stored 'token'
+        if stored == 'token' and shopify_env_value('client_id') and not shopify_env_value('api_key'):
+            return 'client_credentials'
+        return stored
+    if shopify_setting(credentials, 'client_id') and shopify_setting(credentials, 'client_secret'):
+        return 'client_credentials'
+    return 'token'
+
+def shopify_shop_domain(credentials):
+    """Normalise whatever was pasted into the field to a bare host."""
+    domain = shopify_setting(credentials, 'shop_domain')
+    domain = domain.replace('https://', '').replace('http://', '').strip('/')
+    # Tolerate a full storefront URL with a path
+    return domain.split('/')[0]
+
+def shopify_webhook_secret(credentials):
+    """The secret Shopify signs webhooks with, which differs per auth route.
+
+    Legacy custom apps sign with the app's API secret key; Dev Dashboard apps
+    sign with the client secret. Fall back to whichever is configured so a store
+    that has both set does not silently reject valid deliveries.
+    """
+    if shopify_auth_mode(credentials) == 'client_credentials':
+        return shopify_setting(credentials, 'client_secret') or shopify_setting(credentials, 'api_secret')
+    return shopify_setting(credentials, 'api_secret') or shopify_setting(credentials, 'client_secret')
+
+# Refresh a little early so a token cannot expire mid-import
+SHOPIFY_TOKEN_SAFETY_MARGIN = timedelta(minutes=5)
+
+def shopify_request_access_token(credentials):
+    """Exchange client id + secret for a 24-hour Admin API access token.
+
+    POST https://{shop}/admin/oauth/access_token
+        grant_type=client_credentials&client_id=…&client_secret=…
+      -> {"access_token": "shpat_…", "scope": "…", "expires_in": 86399}
+
+    The result is cached on the credentials row, so restarts and concurrent
+    worker threads reuse one token instead of requesting a new one per fetch.
+    """
+    domain = shopify_shop_domain(credentials)
+    client_id = shopify_setting(credentials, 'client_id')
+    client_secret = shopify_setting(credentials, 'client_secret')
+    if not (client_id and client_secret):
+        raise IntegrationError('Shopify client ID and client secret are required for '
+                               'the Dev Dashboard authentication route.')
+
+    response = integration_request(
+        'POST', f'https://{domain}/admin/oauth/access_token', 'Shopify',
+        data={
+            'grant_type': 'client_credentials',
+            'client_id': client_id,
+            'client_secret': client_secret,
+        },
+        headers={'Content-Type': 'application/x-www-form-urlencoded'})
+
+    payload = response.json()
+    token = payload.get('access_token')
+    if not token:
+        raise IntegrationError('Shopify did not return an access token. '
+                               'Check the client ID and secret.')
+
+    # Shopify issues a token even when the app was released with no scopes
+    # approved, and every orders request then 403s with nothing here to explain
+    # it. Fail now, with the fix, rather than one confusing layer later. Nothing
+    # is cached: a scopeless token is not worth reusing for 24 hours.
+    granted = {s.strip() for s in (payload.get('scope') or '').split(',') if s.strip()}
+    if not granted & {'read_orders', 'read_all_orders'}:
+        raise IntegrationError(
+            'Shopify issued a token with '
+            + (f"only these scopes: {', '.join(sorted(granted))}" if granted
+               else 'no access scopes at all')
+            + '. Orders need read_orders. In the Shopify Dev Dashboard, add '
+              'read_orders, read_customers, read_fulfillments and read_products to '
+              'the app configuration, release that version, then install the app on '
+              'the store so the scopes are approved.')
+
+    expires_in = int(payload.get('expires_in') or 86400)
+    credentials.access_token = token
+    credentials.access_token_expires_at = datetime.now() + timedelta(seconds=expires_in)
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        # A token we could not cache is still a usable token for this request
+        app.logger.warning(f"Could not cache the Shopify access token: {e}")
+
+    app.logger.info(f"Obtained a Shopify access token, valid for {expires_in}s, "
+                    f"scopes: {', '.join(sorted(granted))}")
+    return token
+
+def shopify_access_token(credentials):
+    """A usable Admin API token for whichever auth route is configured."""
+    if shopify_auth_mode(credentials) == 'token':
+        token = shopify_setting(credentials, 'api_key')
+        if not token:
+            raise IntegrationError('No Shopify Admin API access token is saved. '
+                                   'Add one on the Management page.')
+        return token
+
+    cached = (credentials.access_token or '').strip()
+    expires_at = credentials.access_token_expires_at
+    if cached and expires_at and datetime.now() + SHOPIFY_TOKEN_SAFETY_MARGIN < expires_at:
+        return cached
+    return shopify_request_access_token(credentials)
+
+def shopify_api_url(credentials, path):
+    return f"https://{shopify_shop_domain(credentials)}/admin/api/{SHOPIFY_API_VERSION}/{path}"
+
+def shopify_next_page_url(link_header):
+    """Shopify pages with a Link header, not page numbers.
+
+    Link: <https://…?page_info=abc>; rel="next"
+    The page_info cursor already encodes the filters, so the follow-up request
+    must send that URL as-is with no extra query parameters.
+    """
+    for part in (link_header or '').split(','):
+        segments = part.split(';')
+        if len(segments) < 2:
+            continue
+        if 'rel="next"' in segments[1].replace(' ', '').replace("'", '"'):
+            return segments[0].strip().strip('<>')
+    return None
+
+def shopify_fetch_order_pages(credentials, start_date, end_date, max_pages=100):
+    headers = {
+        'X-Shopify-Access-Token': shopify_access_token(credentials),
+        'Content-Type': 'application/json',
+    }
+    url = shopify_api_url(credentials, 'orders.json')
+    params = {
+        'status': 'any',
+        'created_at_min': f'{start_date}T00:00:00',
+        'created_at_max': f'{end_date}T23:59:59',
+        'limit': 250,  # Shopify's maximum page size
+    }
+
+    orders = []
+    for page in range(max_pages):
+        response = integration_request('GET', url, 'Shopify', params=params, headers=headers)
+        batch = response.json().get('orders', [])
+        orders.extend(batch)
+        app.logger.info(f"Shopify page {page + 1}: {len(batch)} order(s)")
+
+        url = shopify_next_page_url(response.headers.get('Link'))
+        if not url:
+            break
+        params = None
+    else:
+        app.logger.warning(f"Stopped paging Shopify orders at {max_pages} pages")
+
+    return orders
+
+def parse_shopify_datetime(value):
+    """Parse Shopify's ISO 8601 timestamps into naive local datetimes."""
+    if not value:
+        return None
+    text = value.strip()
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+    try:
+        return to_local_naive(datetime.fromisoformat(text))
+    except ValueError:
+        app.logger.warning(f"Unparseable Shopify timestamp: {value!r}")
+        return None
+
+def shopify_shipping_amount(order):
+    """Total shipping charged, in the shop's own currency."""
+    shipping_set = (order.get('total_shipping_price_set') or {}).get('shop_money') or {}
+    if shipping_set.get('amount') is not None:
+        return Decimal(str(shipping_set['amount']))
+    # Older payloads only carry the per-line breakdown
+    return sum((Decimal(str(line.get('price', '0')))
+                for line in order.get('shipping_lines') or []), Decimal('0'))
+
+def process_shopify_data(shopify_orders):
+    """Translate Shopify order payloads into the shape import_processed_orders wants."""
+    processed_orders = []
+
+    for order in shopify_orders:
+        try:
+            if order.get('test'):
+                app.logger.info(f"Skipping Shopify test order {order.get('name')}")
+                continue
+            if order.get('cancelled_at'):
+                app.logger.info(f"Skipping cancelled Shopify order {order.get('name')}")
                 continue
 
-        session.commit()
-        
-    except Exception as e:
-        session.rollback()
-        return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
+            address = order.get('shipping_address') or order.get('billing_address') or {}
+            customer = order.get('customer') or {}
+            name = address.get('name') or ' '.join(
+                filter(None, [address.get('first_name'), address.get('last_name')])) or \
+                ' '.join(filter(None, [customer.get('first_name'), customer.get('last_name')]))
 
-    message = (f'Successfully processed Shippo orders. '
-               f'Created {orders_created} new orders. '
-               f'Updated {orders_updated} existing orders.')
-    if errors:
-        message += f' Encountered {len(errors)} errors.'
-    
-    return jsonify({
-        'message': message,
-        'errors': errors
-    }), 200 if not errors else 207
+            customer_data = {
+                'name': name or 'Unknown',
+                'email': order.get('email') or customer.get('email') or '',
+                'company': address.get('company') or '',
+                'street1': address.get('address1') or '',
+                'street2': address.get('address2') or '',
+                'street3': '',
+                'city': address.get('city') or '',
+                # province_code is the USPS abbreviation get_state_info expects
+                'state': address.get('province_code') or address.get('province') or '',
+                'postal_code': address.get('zip') or '',
+                'country': address.get('country_code') or '',
+                'phone': address.get('phone') or customer.get('phone') or '',
+            }
+
+            # Name, email, phone and address are all Shopify "Level 2" protected
+            # customer data. For an admin-created custom app that access depends
+            # on the store's plan, so on anything below Advanced they come back
+            # null and there is nothing here to identify the buyer with. Import
+            # the order anyway and flag it — order totals and line items are
+            # still worth having.
+            customer_data_unavailable = not any([
+                customer_data['email'],
+                name,
+                customer_data['street1'],
+                customer_data['postal_code'],
+            ])
+
+            order_date = parse_shopify_datetime(order.get('created_at')) or datetime.now()
+
+            # Most recent fulfillment carries the carrier and tracking we display
+            shipservice = tracking = shipdate = None
+            fulfillments = order.get('fulfillments') or []
+            if fulfillments:
+                fulfillment = fulfillments[-1]
+                tracking = fulfillment.get('tracking_number') or None
+                carrier = (fulfillment.get('tracking_company') or '').strip()
+                if carrier:
+                    shipservice = carrier.split()[0].upper()
+                fulfilled_at = parse_shopify_datetime(fulfillment.get('created_at'))
+                shipdate = fulfilled_at.date() if fulfilled_at else None
+
+            items = []
+            for line in order.get('line_items') or []:
+                quantity = int(line.get('quantity') or 0)
+                if quantity < 1:
+                    continue
+                items.append({
+                    'sku': line.get('sku') or line.get('title') or 'Unknown SKU',
+                    'name': line.get('title') or 'Unknown Item',
+                    'quantity': quantity,
+                    'unit_price': Decimal(str(line.get('price', '0'))),
+                })
+
+            internal_notes = 'Imported from Shopify'
+            if customer_data_unavailable:
+                internal_notes += (' — Shopify withheld the customer details for this '
+                                   'order (store plan does not grant protected customer '
+                                   'data). Enter the customer by hand.')
+
+            processed_orders.append({
+                'external_order_id': str(order['id']),
+                # "#1001" — the order number the merchant and buyer both see
+                'external_order_number': order.get('name') or str(order.get('order_number') or order['id']),
+                'order_date': order_date,
+                'shipservice': shipservice,
+                'tracking': tracking,
+                'shipdate': shipdate,
+                'customer': customer_data,
+                'customer_data_unavailable': customer_data_unavailable,
+                'items': items,
+                'order_total': Decimal(str(order.get('total_price', '0'))),
+                'tax_amount': Decimal(str(order.get('total_tax', '0'))),
+                'shipping_amount': shopify_shipping_amount(order),
+                'customer_notes': order.get('note') or '',
+                'internal_notes': internal_notes,
+            })
+        except Exception as e:
+            app.logger.error(
+                f"Skipping malformed Shopify order {order.get('name', order.get('id', 'Unknown'))}: {e}")
+            continue
+
+    return processed_orders
+
+@app.route('/shopify/fetch_orders', methods=['POST'])
+@login_required
+@retry_on_db_lock()
+def fetch_shopify_orders():
+    credentials, error = require_integration(ShopifyCredentials, 'Shopify')
+    if error:
+        return error
+    if not shopify_shop_domain(credentials):
+        return jsonify({'error': 'Set the Shopify store domain (your-store.myshopify.com) '
+                                 'on the Management page.'}), 400
+
+    start_date = request.form.get('start_date')
+    end_date = request.form.get('end_date')
+    if not start_date or not end_date:
+        return jsonify({'error': 'Start date and end date are required'}), 400
+    try:
+        datetime.strptime(start_date, '%Y-%m-%d')
+        datetime.strptime(end_date, '%Y-%m-%d')
+    except ValueError:
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    try:
+        raw_orders = shopify_fetch_order_pages(credentials, start_date, end_date)
+    except IntegrationError as e:
+        return jsonify({'error': str(e)}), 502
+
+    if not raw_orders:
+        return jsonify({'message': 'No Shopify orders in that date range.', 'errors': []}), 200
+
+    try:
+        result = import_processed_orders(
+            process_shopify_data(raw_orders), 'shopify')
+    except IntegrationError as e:
+        return jsonify({'error': str(e)}), 500
+
+    return import_response('Shopify', result)
+
+def verify_shopify_webhook(credentials, raw_body):
+    """Constant-time check of the X-Shopify-Hmac-Sha256 header.
+
+    Shopify signs the exact bytes of the request body with the app's API secret,
+    so the raw body must be read before anything parses it.
+    """
+    provided = request.headers.get('X-Shopify-Hmac-Sha256', '')
+    if not provided:
+        return False
+    secret = shopify_webhook_secret(credentials)
+    if not secret:
+        return False
+    expected = base64.b64encode(
+        hmac.new(secret.encode('utf-8'), raw_body, hashlib.sha256).digest()
+    ).decode()
+    return hmac.compare_digest(expected, provided)
+
+@app.route('/shopify/webhook', methods=['POST'])
+def shopify_webhook():
+    """Receive orders/create, orders/updated and orders/fulfilled from Shopify.
+
+    Unauthenticated by design — Shopify cannot log in. The HMAC signature is the
+    credential, so an unsigned or mis-signed request is rejected before the body
+    is parsed. Returns 404 unless webhooks are explicitly switched on, so the
+    endpoint does not exist for anyone scanning the host.
+
+    Deliveries are at-least-once: repeats are safe because the importer matches
+    on (source='shopify', external_order_id) and updates in place.
+    """
+    credentials = ShopifyCredentials.query.first()
+    if not credentials or not credentials.enabled or not credentials.webhooks_enabled:
+        abort(404)
+    if not credentials.api_secret:
+        app.logger.error('Shopify webhook arrived but no API secret is configured to verify it')
+        abort(404)
+
+    raw_body = request.get_data()
+    if not verify_shopify_webhook(credentials, raw_body):
+        app.logger.warning(f"Rejected Shopify webhook with an invalid HMAC from {request.remote_addr}")
+        abort(401)
+
+    shop = (request.headers.get('X-Shopify-Shop-Domain') or '').lower()
+    configured = shopify_shop_domain(credentials).lower()
+    if configured and shop != configured:
+        app.logger.warning(f"Rejected Shopify webhook for unexpected shop {shop!r}")
+        abort(401)
+
+    topic = request.headers.get('X-Shopify-Topic', 'unknown')
+    try:
+        payload = json.loads(raw_body.decode('utf-8'))
+    except (ValueError, UnicodeDecodeError):
+        app.logger.error(f"Shopify webhook {topic} had an unparseable body")
+        abort(400)
+
+    processed = process_shopify_data([payload])
+    if not processed:
+        # Test or cancelled order — acknowledge so Shopify stops retrying
+        app.logger.info(f"Shopify webhook {topic}: nothing to import")
+        return jsonify({'status': 'ignored'}), 200
+
+    try:
+        result = import_processed_orders(processed, 'shopify')
+    except IntegrationError as e:
+        # 5xx so Shopify retries with backoff
+        app.logger.error(f"Shopify webhook {topic} could not be saved: {e}")
+        return jsonify({'status': 'error'}), 500
+
+    if result.errors:
+        app.logger.error(f"Shopify webhook {topic} import errors: {result.errors}")
+        return jsonify({'status': 'error', 'errors': result.errors}), 500
+
+    app.logger.info(f"Shopify webhook {topic}: created {result.created}, "
+                    f"updated {result.updated}, adopted {result.adopted}, "
+                    f"pending {result.pending}")
+    return jsonify({'status': 'ok', 'created': result.created, 'updated': result.updated,
+                    'adopted': result.adopted, 'pending': result.pending}), 200
 
 @app.route('/finance')
 @login_required
@@ -1583,7 +2637,7 @@ def upload_transactions():
                     
                 try:
                     date = datetime.strptime(date_str.strip(), '%m/%d/%Y').date()
-                except ValueError as e:
+                except ValueError:
                     continue
                 
                 amount_str = row['Amount']
@@ -1635,8 +2689,10 @@ def upload_transactions():
 def link_receipt(transaction_id, receipt_id):
     try:
         transaction = BankTransaction.query.get_or_404(transaction_id)
-        receipt = SalesReceipt.query.get_or_404(receipt_id)
-        
+        # 404 early rather than storing a receipt_id that does not exist
+        SalesReceipt.query.get_or_404(receipt_id)
+
+
         transaction.receipt_id = receipt_id
         db.session.commit()
         
@@ -1728,48 +2784,32 @@ def format_name(name):
     return ' '.join(formatted_parts)
 
 def get_or_create_customer(customer_data):
-    
-    for attempt in range(max_retries):
-        try:
-            with db.session.no_autoflush:
-                email = customer_data.get('email')
-                
-                if not email:
-                    placeholder_email = f"placeholder_{uuid.uuid4().hex}@example.com"
-                    app.logger.warning(f"Missing customer email. Generated placeholder: {placeholder_email}")
-                    email = placeholder_email
+    """Match an imported order's customer by email on db.session, creating if new.
 
-                customer = Customer.query.filter_by(email=email).first()
-    
-                if not customer:
-                    formatted_name = format_name(customer_data.get('name', 'Unknown'))
-                    customer = Customer(
-                        name=formatted_name,
-                        company=customer_data.get('company', ''),
-                        email=email,
-                        phone=customer_data.get('phone', ''),
-                        billing_address=format_address(customer_data),
-                        shipping_address=format_address(customer_data)
-                    )
-                    db.session.add(customer)
-                    db.session.flush()
-                #else:
-                #    # Update existing customer information
-                #    customer.name = formatted_name
-                #    customer.company = customer_data.get('company', customer.company)
-                #    customer.phone = customer_data.get('phone', customer.phone)
-                #    customer.billing_address = format_address(customer_data)
-                #    customer.shipping_address = format_address(customer_data)
+    Existing customers are never overwritten — addresses and names are routinely
+    corrected by hand here, and the marketplace copy is not authoritative.
+    """
+    with db.session.no_autoflush:
+        email = (customer_data.get('email') or '').strip()
+        if not email:
+            email = _placeholder_email()
 
-                return customer
+        customer = Customer.query.filter_by(email=email).first()
+        if customer:
+            return customer
 
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e) and attempt < max_retries - 1:
-                time.sleep(retry_delay * (2 ** attempt))
-            else:
-                raise
-        
-    raise Exception("Failed to create/get customer after retries")
+        address = format_address(customer_data)
+        customer = Customer(
+            name=format_name(customer_data.get('name', 'Unknown')),
+            company=customer_data.get('company') or '',
+            email=email,
+            phone=customer_data.get('phone') or '',
+            billing_address=address,
+            shipping_address=address
+        )
+        db.session.add(customer)
+        db.session.flush()
+        return customer
 
 def format_address(address_dict):
     country_code = address_dict.get('country', '')
@@ -1783,12 +2823,18 @@ def format_address(address_dict):
     else:
         state_full = get_state_name(state_code, country_code)
 
-    # Combine the address parts with proper capitalization
+    # "City, ST 98501" — but assembled from whatever is actually present. When a
+    # platform withholds the street/city/ZIP (Shopify's protected customer data
+    # rules) this must not degrade to ", CA", which get_state_info cannot read.
+    city = title_capitalize(address_dict.get('city', '') or '')
+    region_zip = ' '.join(part for part in [state_full, address_dict.get('postal_code', '')] if part).strip()
+    locality = ', '.join(part for part in [city, region_zip] if part)
+
     address_parts = [
         title_capitalize(address_dict.get('street1', '')),
         title_capitalize(address_dict.get('street2', '')),
         title_capitalize(address_dict.get('street3', '')),
-        f"{title_capitalize(address_dict.get('city', ''))}, {state_full} {address_dict.get('postal_code', '')}",
+        locality,
         country_full
     ]
 
@@ -2006,72 +3052,66 @@ def format_items(line_items):
             formatted_items.append(item.product.sku)
     return '; '.join(formatted_items)
 
+def to_local_naive(value):
+    """Normalise a datetime to naive local time.
+
+    Every other write path stores naive local datetimes (ShipStation's dates,
+    hand-entered sales). Storing tz-aware UTC alongside them made the sales grid
+    sort wrong and could push a sale into the neighbouring quarter on the state
+    taxes report.
+    """
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone().replace(tzinfo=None)
+
 def process_shipstation_data(shipstation_orders):
+    """Turn raw ShipStation order payloads into the shape import_processed_orders wants.
+
+    Pure translation — no database work. It used to call get_or_create_customer
+    inside a savepoint and then throw the result away, keeping only the dict.
+    """
     processed_orders = []
 
     for order in shipstation_orders:
         try:
-            # Use a dedicated session for each order
-            with db.session.begin_nested() as nested:
-                try:
-                    customer_data = {
-                        'name': order['shipTo'].get('name', 'Unknown'),
-                        'email': order.get('customerEmail'),
-                        'company': order['shipTo'].get('company', ''),
-                        'street1': order['shipTo'].get('street1', ''),
-                        'street2': order['shipTo'].get('street2', ''),
-                        'street3': order['shipTo'].get('street3', ''),
-                        'city': order['shipTo'].get('city', ''),
-                        'state': order['shipTo'].get('state', ''),
-                        'postal_code': order['shipTo'].get('postalCode', ''),
-                        'country': order['shipTo'].get('country', ''),
-                        'phone': order['shipTo'].get('phone', ''),
-                    }
+            ship_to = order.get('shipTo') or {}
+            customer_data = {
+                'name': ship_to.get('name', 'Unknown'),
+                'email': order.get('customerEmail'),
+                'company': ship_to.get('company', ''),
+                'street1': ship_to.get('street1', ''),
+                'street2': ship_to.get('street2', ''),
+                'street3': ship_to.get('street3', ''),
+                'city': ship_to.get('city', ''),
+                'state': ship_to.get('state', ''),
+                'postal_code': ship_to.get('postalCode', ''),
+                'country': ship_to.get('country', ''),
+                'phone': ship_to.get('phone', ''),
+            }
 
-                    # Use get_or_create_customer with retry logic                  
-                    for attempt in range(max_retries):
-                        try:
-                            customer = get_or_create_customer(customer_data)
-                            break
-                        except sqlite3.OperationalError as e:
-                            if "database is locked" in str(e) and attempt < max_retries - 1:
-                                time.sleep(retry_delay * (2 ** attempt))
-                            else:
-                                raise
-
-                    if not customer:
-                        raise Exception("Failed to create/get customer after retries")
-
-                    processed_order = {
-                        'order_id': order['orderId'],
-                        'shipstation_order_id': order['orderId'],
-                        'order_number': order['orderNumber'],
-                        'sales_receipt_date': datetime.strptime(parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
-                        'customer': customer_data,  # Use the original customer_data dictionary
-                        'items': [
-                            {
-                                'sku': item.get('sku', 'Unknown SKU'),
-                                'name': item.get('name', 'Unknown Item'),
-                                'quantity': item.get('quantity', 0),
-                                'unit_price': Decimal(str(item.get('unitPrice', '0'))),
-                                'options': item.get('options', []),
-                            } for item in order.get('items', [])
-                        ],
-                        'order_total': Decimal(str(order.get('orderTotal', '0'))),
-                        'amount_paid': Decimal(str(order.get('amountPaid', '0'))),
-                        'tax_amount': Decimal(str(order.get('taxAmount', '0'))),
-                        'shipping_amount': Decimal(str(order.get('shippingAmount', '0'))),
-                        'customer_notes': order['customerNotes'],
-                        'internal_notes': order['internalNotes']
-                    }
-                    processed_orders.append(processed_order)
-
-                except Exception as e:
-                    nested.rollback()
-                    raise e
-
+            processed_orders.append({
+                'external_order_id': order['orderId'],
+                'external_order_number': order['orderNumber'],
+                'order_date': datetime.strptime(
+                    parse_shipstation_date(order['orderDate']), '%Y-%m-%dT%H:%M:%S.%f'),
+                'customer': customer_data,
+                'items': [
+                    {
+                        'sku': item.get('sku') or 'Unknown SKU',
+                        'name': item.get('name') or 'Unknown Item',
+                        'quantity': item.get('quantity', 0),
+                        'unit_price': Decimal(str(item.get('unitPrice', '0'))),
+                    } for item in order.get('items', [])
+                ],
+                'order_total': Decimal(str(order.get('orderTotal', '0'))),
+                'tax_amount': Decimal(str(order.get('taxAmount', '0'))),
+                'shipping_amount': Decimal(str(order.get('shippingAmount', '0'))),
+                'customer_notes': order.get('customerNotes') or '',
+                'internal_notes': order.get('internalNotes') or '',
+            })
         except Exception as e:
-            app.logger.error(f"1608: Error processing order {order.get('orderId', 'Unknown')}: {str(e)}")
+            app.logger.error(
+                f"Skipping malformed ShipStation order {order.get('orderId', 'Unknown')}: {e}")
             continue
 
     return processed_orders
@@ -2097,16 +3137,14 @@ def process_shippo_data(shippo_orders):
                 'phone': to_address.get('phone', ''),
             }
             
-            # Parse order date - fix for Shippo's Z-terminated dates
+            # Parse order date. Shippo returns Z-terminated UTC; convert to naive
+            # local time so it sorts and filters alongside every other sale date.
             order_date = order.get('placed_at') or order.get('object_created')
             if order_date:
-                # Handle Z-terminated UTC dates from Shippo
                 if order_date.endswith('Z'):
-                    # Remove Z and parse as UTC
-                    order_date = datetime.strptime(order_date[:-1], '%Y-%m-%dT%H:%M:%S')
-                    order_date = order_date.replace(tzinfo=timezone.utc)
+                    parsed = datetime.strptime(order_date[:-1].split('.')[0], '%Y-%m-%dT%H:%M:%S')
+                    order_date = to_local_naive(parsed.replace(tzinfo=timezone.utc))
                 else:
-                    # Try other common formats
                     try:
                         order_date = datetime.strptime(order_date.split('.')[0], '%Y-%m-%dT%H:%M:%S')
                     except ValueError:
@@ -2129,28 +3167,32 @@ def process_shippo_data(shippo_orders):
                 unit_price = total_price / quantity if quantity > 0 else Decimal('0')
                 
                 items.append({
-                    'sku': item.get('sku', 'Unknown SKU'),
-                    'name': item.get('title', 'Unknown Item'),
+                    'sku': item.get('sku') or 'Unknown SKU',
+                    'name': item.get('title') or 'Unknown Item',
                     'quantity': quantity,
                     'unit_price': unit_price,
-                    'options': []
                 })
-            
+
             # Extract order totals - handle string/numeric values
             total_price = Decimal(str(order.get('total_price', '0')))
             shipping_cost = Decimal(str(order.get('shipping_cost', '0')))
             total_tax = Decimal(str(order.get('total_tax', '0')))
-            
+
+            shipdate = order_date.date() if order_date else None
+
             processed_order = {
-                'order_id': order.get('object_id', ''),
-                'order_number': order.get('order_number', ''),
+                'external_order_id': order.get('object_id', ''),
+                'external_order_number': order.get('order_number', ''),
                 'order_date': order_date,
+                # Shippo has no separate ship date; the local order date matches
+                # the convention ShipStation imports already use
+                'shipdate': shipdate,
                 'customer': customer_data,
                 'items': items,
                 'order_total': total_price,
                 'tax_amount': total_tax,
                 'shipping_amount': shipping_cost,
-                'customer_notes': order.get('notes', ''),
+                'customer_notes': order.get('notes') or '',
                 'internal_notes': f"Imported from {order.get('shop_app', 'Shippo')} via Shippo API"
             }
             
@@ -2180,118 +3222,80 @@ def parse_shipstation_date(date_str):
     # Convert to datetime object and return it
     return datetime.strptime(cleaned_date_str, '%Y-%m-%dT%H:%M:%S.%f').strftime('%Y-%m-%dT%H:%M:%S.%f')
 
-def process_line_items(sale, shipstation_items, session):
-    try:
-        # Use a nested transaction for deleting line items
-        with session.begin_nested():
-            # Delete existing line items if updating an existing sale
-            if sale.line_items:
-                for item in sale.line_items:
-                    session.delete(item)
-                session.flush()  # Flush the deletes first
-            
-            # Create new line items
-            for item in shipstation_items:
-                product = get_or_create_product(item, session)
-                line_item = LineItem(
-                    receipt_id=sale.id,
-                    product_id=product.id,
-                    quantity=int(item['quantity']),
-                    price_each=float(item['unit_price']),
-                    total_price=float(item['quantity']) * float(item['unit_price'])
-                )
-                session.add(line_item)
-                
-            session.flush()  # Flush the new items
-    except sqlite3.OperationalError as e:
-        if "database is locked" in str(e):
-            # Implement retry logic
-            for attempt in range(3):
-                try:
-                    time.sleep(0.5 * (2 ** attempt))
-                    # Retry the entire operation
-                    with session.begin_nested():
-                        if sale.line_items:
-                            for item in sale.line_items:
-                                session.delete(item)
-                            session.flush()
-                        
-                        for item in shipstation_items:
-                            product = get_or_create_product(item, session)
-                            line_item = LineItem(
-                                receipt_id=sale.id,
-                                product_id=product.id,
-                                quantity=int(item['quantity']),
-                                price_each=float(item['unit_price']),
-                                total_price=float(item['quantity']) * float(item['unit_price'])
-                            )
-                            session.add(line_item)
-                            
-                        session.flush()
-                    break
-                except sqlite3.OperationalError:
-                    if attempt == 2:  # Last attempt
-                        raise
-                    continue
-        else:
-            raise
+def replace_line_items(sale, imported_items):
+    """Build a receipt's line items from an imported order.
 
-def get_or_create_product(shipstation_item, session):
-    """Get or create a product with the given session"""
-    try:
-        with session.begin_nested():
-            product = session.query(Product).filter_by(sku=shipstation_item['sku']).first()
-            if not product:
-                product = Product(
-                    sku=shipstation_item['sku'],
-                    description=shipstation_item['name'],
-                    price=float(shipstation_item['unit_price']),
-                    # Initial guess from the legacy SKU convention; editable on the products page
-                    is_manufactured=(shipstation_item['sku'] or '').endswith('A')
-                )
-                session.add(product)
-                session.flush()
-            return product
-    except sqlite3.OperationalError as e:
-        if "database is locked" in str(e):
-            for attempt in range(3):
-                try:
-                    time.sleep(0.5 * (2 ** attempt))
-                    with session.begin_nested():
-                        product = session.query(Product).filter_by(sku=shipstation_item['sku']).first()
-                        if not product:
-                            product = Product(
-                                sku=shipstation_item['sku'],
-                                description=shipstation_item['name'],
-                                price=float(shipstation_item['unit_price']),
-                                is_manufactured=(shipstation_item['sku'] or '').endswith('A')
-                            )
-                            session.add(product)
-                            session.flush()
-                        return product
-                except sqlite3.OperationalError:
-                    if attempt == 2:  # Last attempt
-                        raise
-                    continue
-        raise
+    Only ever called for receipts the importer just created. Re-importing an
+    existing order deliberately leaves its line items alone: the previous code
+    deleted and rebuilt them on every fetch, silently discarding prices and
+    quantities that had been corrected by hand.
+    """
+    for item in sale.line_items:
+        db.session.delete(item)
+    if sale.line_items:
+        db.session.flush()
+
+    for item in imported_items:
+        product = get_or_create_product(item)
+        quantity = int(item['quantity'])
+        price_each = Decimal(str(item['unit_price']))
+        db.session.add(LineItem(
+            receipt_id=sale.id,
+            product_id=product.id,
+            quantity=quantity,
+            price_each=float(price_each),
+            total_price=float(price_each * quantity)
+        ))
+    db.session.flush()
+
+def get_or_create_product(imported_item):
+    """Look up a product by SKU on db.session, creating it if it is new.
+
+    The hand-rolled 'database is locked' retry loops this used to carry are gone:
+    they caught sqlite3.OperationalError, which SQLAlchemy never raises, and WAL
+    journaling plus busy_timeout now handle the contention they were aimed at.
+    """
+    sku = (imported_item.get('sku') or 'Unknown SKU').strip()[:20]
+    product = Product.query.filter_by(sku=sku).first()
+    if product:
+        return product
+
+    product = Product(
+        sku=sku,
+        description=(imported_item.get('name') or 'Unknown Item')[:200],
+        price=Decimal(str(imported_item.get('unit_price', '0'))),
+        # Initial guess from the legacy SKU convention; editable on the products page
+        is_manufactured=sku.endswith('A')
+    )
+    db.session.add(product)
+    db.session.flush()
+    return product
 
 def merge_customers(customer_id1, customer_id2):
     """
     Merge two customers. The customer with the lower ID is preserved.
     If email addresses differ, the secondary email is saved in email_2 field.
     """
-    customer1 = Customer.query.get(customer_id1)
-    customer2 = Customer.query.get(customer_id2)
+    customer1 = db.session.get(Customer, customer_id1)
+    customer2 = db.session.get(Customer, customer_id2)
 
     if not customer1 or not customer2:
         return False, "One or both customers not found."
 
+    if customer1.id == customer2.id:
+        return False, "Cannot merge a customer into itself."
+
     # Determine which customer to keep (lower ID)
     keep, merge = (customer1, customer2) if customer1.id < customer2.id else (customer2, customer1)
 
-    # Merge email if different
+    # Park the other address in email_2, but never overwrite an email_2 that is
+    # already in use — that address would be lost with no way to recover it
+    dropped_email = None
     if keep.email != merge.email:
-        keep.email_2 = merge.email
+        if not keep.email_2:
+            keep.email_2 = merge.email
+        elif keep.email_2 != merge.email:
+            dropped_email = merge.email
 
     # Merge other fields (use data from 'keep' if available, otherwise use 'merge')
     keep.company = keep.company or merge.company
@@ -2308,9 +3312,14 @@ def merge_customers(customer_id1, customer_id2):
 
     try:
         db.session.commit()
-        return True, f"Customers merged successfully. Kept customer ID: {keep.id}"
+        message = f"Customers merged successfully. Kept customer ID: {keep.id}"
+        if dropped_email:
+            message += (f" Note: {dropped_email} was not kept — "
+                        f"both email fields on customer {keep.id} were already in use.")
+        return True, message
     except SQLAlchemyError as e:
         db.session.rollback()
+        app.logger.error(f"Error merging customers {customer_id1}/{customer_id2}: {e}")
         return False, f"Error merging customers: {str(e)}"
 
 def is_duplicate_transaction(new_transaction):
@@ -2326,4 +3335,22 @@ def is_duplicate_transaction(new_transaction):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=False, host="0.0.0.0", port=4444, use_reloader=True)
+        # A snapshot on every start, before anyone can touch the data
+        backup_database()
+
+    host = os.environ.get('SALES_TRACKER_HOST', '0.0.0.0')  # LAN access is required
+    port = int(os.environ.get('SALES_TRACKER_PORT', '4444'))
+
+    try:
+        from waitress import serve
+    except ImportError:
+        app.logger.warning('waitress is not installed; falling back to the Flask dev server. '
+                           'Run: pip install -r requirements.txt')
+        print('waitress not installed — falling back to the Flask development server.')
+        # use_reloader stays off: it runs the whole module twice, so startup
+        # backups and db.create_all() would each happen twice per launch
+        app.run(debug=False, host=host, port=port, use_reloader=False)
+    else:
+        app.logger.info(f'Serving with waitress on http://{host}:{port}')
+        print(f'Sales Tracker running on http://{host}:{port}  (Ctrl+C to stop)')
+        serve(app, host=host, port=port, threads=8, ident='Sales Tracker')

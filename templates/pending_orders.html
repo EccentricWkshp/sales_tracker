@@ -1,0 +1,271 @@
+<!-- templates/pending_orders.html -->
+{% extends "base.html" %}
+
+{% block title %}Pending Orders{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Pending Orders</h1>
+        <p class="page-subtitle">
+            Imported orders whose buyer details the store withheld. Nothing here is a sale
+            yet — these figures count toward no total until you name the customer.
+        </p>
+    </div>
+</div>
+
+<div class="alert alert-info mb-4">
+    Shopify only shares a customer's name, email, phone and address with apps approved for
+    <strong>protected customer data</strong>, which for a custom app depends on the store's
+    plan (Advanced or Plus). Everything else — order number, date, totals, tax, shipping and
+    line items — imports normally and is filled in below. Add the customer and the order
+    becomes an ordinary sales receipt.
+</div>
+
+<div class="toolbar">
+    <a href="{{ url_for('sales') }}" class="btn btn-secondary"><i class="fas fa-arrow-left"></i> Back to Sales</a>
+    <div class="toolbar-spacer"></div>
+    <button id="refreshPendingBtn" class="btn btn-secondary"><i class="fas fa-sync"></i> Refresh</button>
+</div>
+
+<div id="pendingGrid" class="ag-theme-alpine" style="width: 100%;"></div>
+{% endblock %}
+
+{% block modal %}
+<div id="completeModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h2>Complete Order <span id="completeOrderNumber"></span></h2>
+
+        <div id="completeSummary" class="alert alert-info"></div>
+
+        <input type="hidden" id="pendingId">
+
+        <div class="form-group">
+            <label for="existingCustomer">Existing Customer</label>
+            <select id="existingCustomer">
+                <option value="">— Create a new customer instead —</option>
+                {% for customer in customers %}
+                    <option value="{{ customer.id }}">{{ customer.name }}{% if customer.company %} ({{ customer.company }}){% endif %}</option>
+                {% endfor %}
+            </select>
+            <p class="form-hint">Pick the buyer if they have ordered before, or leave this
+               blank and fill in the new-customer fields.</p>
+        </div>
+
+        <div id="newCustomerFields">
+            <h3>New Customer</h3>
+            <div class="form-group">
+                <label for="pc_name">Name</label>
+                <input type="text" id="pc_name">
+            </div>
+            <div class="form-group">
+                <label for="pc_company">Company</label>
+                <input type="text" id="pc_company">
+            </div>
+            <div class="form-group">
+                <label for="pc_email">Email</label>
+                <input type="email" id="pc_email">
+                <p class="form-hint">Leave blank if unknown — a placeholder is generated.</p>
+            </div>
+            <div class="form-group">
+                <label for="pc_phone">Phone</label>
+                <input type="tel" id="pc_phone">
+            </div>
+            <div class="form-group">
+                <label for="pc_billing">Billing Address</label>
+                <textarea id="pc_billing" rows="4"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="pc_shipping">Shipping Address</label>
+                <textarea id="pc_shipping" rows="4"></textarea>
+                <p class="form-hint">
+                    The state taxes report reads this address, so include the city, state and
+                    ZIP in the usual <code>City, ST 98501</code> form.
+                </p>
+            </div>
+            <button type="button" id="copyBillingBtn" class="btn btn-secondary">
+                <i class="fas fa-copy"></i> Copy billing to shipping
+            </button>
+        </div>
+
+        <div class="actions">
+            <button type="button" class="btn btn-close"><i class="fas fa-times"></i> Cancel</button>
+            <button type="button" id="confirmCompleteBtn" class="btn btn-primary">
+                <i class="fas fa-check"></i> Create Sale
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+var gridApi;
+
+document.addEventListener('DOMContentLoaded', function() {
+    var gridOptions = {
+        domLayout: 'autoHeight',
+        columnDefs: [
+            {
+                headerName: '',
+                field: 'discard',
+                cellRenderer: function() {
+                    return '<i class="fas fa-trash" title="Discard" style="cursor: pointer;"></i>';
+                },
+                onCellClicked: function(params) {
+                    if (confirm('Discard this pending order?\n\nIt can be brought back by ' +
+                                're-running the import for its date range.')) {
+                        discardPending(params.data.id);
+                    }
+                },
+                maxWidth: 44, sortable: false, filter: false, resizable: false
+            },
+            { headerName: 'Source', field: 'source', maxWidth: 110, sortable: true, filter: true },
+            { headerName: 'Order #', field: 'external_order_number', sortable: true, filter: true },
+            { headerName: 'Order Date', field: 'order_date', sortable: true, sort: 'desc', filter: true },
+            { headerName: 'Location Hint', field: 'location_hint', sortable: true, filter: true,
+              tooltipField: 'location_hint' },
+            { headerName: 'Items', field: 'items', flex: 2, sortable: true, filter: true },
+            { headerName: 'Total', field: 'total', valueFormatter: currencyFormatter,
+              type: 'rightAligned', sortable: true, filter: 'agNumberColumnFilter' },
+            { headerName: 'Tax', field: 'tax', valueFormatter: currencyFormatter,
+              type: 'rightAligned', sortable: true, filter: 'agNumberColumnFilter' },
+            { headerName: 'Shipping', field: 'shipping', valueFormatter: currencyFormatter,
+              type: 'rightAligned', sortable: true, filter: 'agNumberColumnFilter' },
+            {
+                headerName: '',
+                field: 'complete',
+                cellRenderer: function() {
+                    return '<button class="btn btn-primary" style="padding: 2px 10px; font-size: 0.8rem;">Complete</button>';
+                },
+                onCellClicked: function(params) { openCompleteModal(params.data); },
+                maxWidth: 130, sortable: false, filter: false, resizable: false
+            }
+        ],
+        rowData: [],
+        defaultColDef: {
+            flex: 1, minWidth: 100, resizable: true,
+            comparator: caseInsensitiveComparator,
+            filterParams: { buttons: ['apply', 'reset'], closeOnApply: true }
+        },
+        overlayNoRowsTemplate:
+            '<span style="padding: 24px;">No pending orders — everything imported has a customer.</span>'
+    };
+
+    var gridDiv = document.querySelector('#pendingGrid');
+    gridApi = agGrid.createGrid(gridDiv, gridOptions);
+    refreshGrid('/api/pending_orders', gridApi);
+
+    document.getElementById('refreshPendingBtn').addEventListener('click', function() {
+        refreshGrid('/api/pending_orders', gridApi);
+    });
+});
+
+function discardPending(id) {
+    $.ajax({
+        url: '/sales/pending/' + id + '/delete',
+        method: 'POST',
+        success: function(response) {
+            refreshGrid('/api/pending_orders', gridApi);
+            showFlashMessage(response.message || 'Discarded.', 'success');
+        },
+        error: function(xhr) {
+            showFlashMessage(serverMessage(xhr, 'Could not discard this order'), 'error');
+        }
+    });
+}
+
+function openCompleteModal(data) {
+    $('#pendingId').val(data.id);
+    $('#completeOrderNumber').text(data.external_order_number || '');
+    $('#completeSummary').html(
+        '<strong>' + $('<div>').text(data.items || 'No line items').html() + '</strong><br>' +
+        'Total ' + currencyFormatter({ value: data.total }) +
+        ' &middot; tax ' + currencyFormatter({ value: data.tax }) +
+        ' &middot; shipping ' + currencyFormatter({ value: data.shipping }) +
+        (data.order_date ? ' &middot; ordered ' + data.order_date : '') +
+        (data.location_hint
+            ? '<br>The store did share a location: <strong>' +
+              $('<div>').text(data.location_hint).html() + '</strong>'
+            : ''));
+
+    // Seed the shipping address with the location hint so the tax report has
+    // something to read once the rest of the address is filled in
+    $('#pc_name, #pc_company, #pc_email, #pc_phone, #pc_billing').val('');
+    $('#pc_shipping').val(data.location_hint ? data.location_hint : '');
+    $('#existingCustomer').val('');
+    syncCustomerFields();
+    $('#completeModal').show();
+}
+
+function syncCustomerFields() {
+    var usingExisting = !!$('#existingCustomer').val();
+    $('#newCustomerFields').toggle(!usingExisting);
+}
+
+$(document).ready(function() {
+    $('#existingCustomer').select2({
+        placeholder: '— Create a new customer instead —',
+        allowClear: true,
+        width: '100%'
+    });
+    $('#existingCustomer').change(syncCustomerFields);
+
+    $('#copyBillingBtn').click(function() {
+        $('#pc_shipping').val($('#pc_billing').val());
+    });
+
+    $('.close, .btn-close').click(function() {
+        $('#completeModal').hide();
+    });
+
+    $(window).click(function(event) {
+        if (event.target === document.getElementById('completeModal')) {
+            $('#completeModal').hide();
+        }
+    });
+
+    $('#confirmCompleteBtn').click(function() {
+        var $button = $(this);
+        var payload = { customer_id: $('#existingCustomer').val() || null };
+
+        if (!payload.customer_id) {
+            if (!$('#pc_name').val().trim()) {
+                showFlashMessage('Enter a customer name, or pick an existing customer.', 'error');
+                return;
+            }
+            payload.customer = {
+                name: $('#pc_name').val(),
+                company: $('#pc_company').val(),
+                email: $('#pc_email').val(),
+                phone: $('#pc_phone').val(),
+                billing_address: $('#pc_billing').val(),
+                shipping_address: $('#pc_shipping').val()
+            };
+        }
+
+        var original = $button.html();
+        $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Creating…');
+
+        $.ajax({
+            url: '/sales/pending/' + $('#pendingId').val() + '/complete',
+            method: 'POST',
+            data: JSON.stringify(payload),
+            contentType: 'application/json',
+            success: function(response) {
+                $('#completeModal').hide();
+                refreshGrid('/api/pending_orders', gridApi);
+                showFlashMessage(response.message, 'success');
+            },
+            error: function(xhr) {
+                showFlashMessage(serverMessage(xhr, 'Could not create the sale'), 'error');
+            },
+            complete: function() {
+                $button.prop('disabled', false).html(original);
+            }
+        });
+    });
+});
+</script>
+{% endblock %}

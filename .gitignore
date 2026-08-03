@@ -10,13 +10,24 @@ old_*.*
 *.so
 *.zip
 
+# Secrets and Environment Variables
+.env
+.env.local
+!.env.example
+
 # Documents and Info
 artifacts/
 static/uploads
 instance
-migrations/
+# migrations/ was Alembic's generated directory; it now holds hand-written
+# one-off scripts that must be version controlled
+migrations/*
+!migrations/*.py
 *.old
 .old/
+roadmap.md
+integrations.md
+
 
 # Python venv
 venv/

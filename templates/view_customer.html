@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block title %}View Customer - {{ customer.name }}{% endblock %}
 
@@ -17,11 +17,11 @@
 
     <div class="address-pane">
         <h2>Billing Address</h2>
-        <p><a href="https://www.google.com/maps/place/{{ customer.billing_address | nl2br }}" target="_blank">{{ customer.billing_address | nl2br }}</a></p>
+        <p><a href="https://www.google.com/maps/search/?api=1&amp;query={{ customer.billing_address | maps_query }}" target="_blank" rel="noopener">{{ customer.billing_address | nl2br }}</a></p>
     </div>
     <div class="address-pane">
         <h2>Shipping Address</h2>
-        <p><a href="https://www.google.com/maps/place/{{ customer.shipping_address | nl2br }}" target="_blank">{{ customer.shipping_address | nl2br }}</a></p>
+        <p><a href="https://www.google.com/maps/search/?api=1&amp;query={{ customer.shipping_address | maps_query }}" target="_blank" rel="noopener">{{ customer.shipping_address | nl2br }}</a></p>
     </div>
 </div>
 
@@ -55,7 +55,7 @@
             </div>
             <div class="form-group">
                 <label for="phone">Phone</label>
-                <input type="phone" id="phone" name="phone">
+                <input type="tel" id="phone" name="phone">
             </div>
             <div class="form-group">
                 <label for="billing_address">Billing Address</label>
@@ -250,12 +250,13 @@ $(document).ready(function() {
             }),
             contentType: "application/json",
             success: function(response) {
-                if (response.success) {
-                    modal.hide();
-                    location.reload();
-                } else {
-                    alert("Error saving customer");
-                }
+                modal.hide();
+                location.reload();
+            },
+            // Validation failures (missing name, duplicate email) return 4xx â€”
+            // without this the modal simply did nothing and looked broken
+            error: function(xhr) {
+                showFlashMessage(serverMessage(xhr, 'Error saving customer'), 'error');
             }
         });
     });

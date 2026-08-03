@@ -4,10 +4,25 @@
 {% block title %}Sales{% endblock %}
 
 {% block content %}
-<h1>Sales</h1>
-<button id="addSaleBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Sale</button>
-<button id="exportSaleBtn" class="btn btn-primary"><i class="fas fa-file-csv"></i> Export Sales</button>
-<div id="salesGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
+<div class="page-header">
+    <div>
+        <h1>Sales</h1>
+        <p class="page-subtitle">{{ sales|length }} sales receipt{{ '' if sales|length == 1 else 's' }}.</p>
+    </div>
+</div>
+
+<div class="toolbar">
+    <button id="addSaleBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Sale</button>
+    <a href="{{ url_for('pending_orders') }}" id="pendingOrdersLink" class="btn btn-secondary" style="display: none;">
+        <i class="fas fa-inbox"></i> Pending Orders <span class="badge" id="pendingOrdersCount"></span>
+    </a>
+    <div class="toolbar-spacer"></div>
+    <input type="search" id="salesQuickFilter" class="form-control input-large"
+           placeholder="Search sales…" aria-label="Search sales">
+    <button id="exportSaleBtn" class="btn btn-secondary"><i class="fas fa-file-csv"></i> Export CSV</button>
+</div>
+
+<div id="salesGrid" class="ag-theme-alpine" style="height: 640px; width: 100%;"></div>
 {% endblock %}
 
 {% block modal %}
@@ -26,8 +41,8 @@
                 <input type="time" id="time" name="time">
             </div>
             <div class="form-group">
-                <label for="shipstation_order_id">Order #</label>
-                <input type="text" id="shipstation_order_id" name="shipstation_order_id">
+                <label for="external_order_number">Order # (from the selling platform)</label>
+                <input type="text" id="external_order_number" name="external_order_number">
             </div>
             <div class="form-group">
                 <label for="customer">Customer</label>
@@ -87,8 +102,10 @@
                     <textarea id="internal_notes" name="internal_notes" class="form-control" rows="3"></textarea>
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Sale</button>
-            <button class="btn btn-close"><i class="fas fa-times"></i> Cancel</a>
+            <div class="actions">
+                <button type="button" class="btn btn-close"><i class="fas fa-times"></i> Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Sale</button>
+            </div>
         </form>
     </div>
 </div>
@@ -202,25 +219,27 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
             },
-            { headerName: 'Order #', field: 'shipstation_order_id', sortable: true, filter: true },
-            { headerName: 'Receipt #', field: 'order_number', sortable: true, filter: true },
-            { headerName: 'Customer', field: 'customer_name', sortable: true, filter: true },
-            { headerName: 'Total', field: 'total', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
-            { headerName: 'Tax', field: 'tax', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
-            { headerName: 'Shipping', field: 'shipping', valueFormatter: p => '$' + p.value.toLocaleString(), sortable: true, filter: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator }
+            { headerName: 'Order #', field: 'external_order_number', sortable: true, filter: true },
+            { headerName: 'Receipt #', field: 'receipt_number', sortable: true, filter: true },
+            { headerName: 'Customer', field: 'customer_name', sortable: true, filter: true, flex: 2 },
+            { headerName: 'Total', field: 'total', valueFormatter: currencyFormatter, type: 'rightAligned', sortable: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
+            { headerName: 'Tax', field: 'tax', valueFormatter: currencyFormatter, type: 'rightAligned', sortable: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
+            { headerName: 'Shipping', field: 'shipping', valueFormatter: currencyFormatter, type: 'rightAligned', sortable: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator }
         ],
+        // Numeric money values so the number filters and sorting compare numbers,
+        // not strings ('9.00' used to sort above '10.00')
         rowData: [
             {% for sale in sales %}
             {
                 id: {{ sale.id }},
                 date: '{{ sale.date.strftime('%m-%d-%Y') }}',
                 shipdate: '{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}',
-                shipstation_order_id: '{{ sale.shipstation_order_id }}',
-                order_number: '{{ sale.order_number }}',
-                customer_name: '{{ sale.customer.name if sale.customer else 'N/A' }}',
-                total: '{{ "%.2f"|format(sale.total) }}',
-                tax: '{{ "%.2f"|format(sale.tax) }}',
-                shipping: '{{ "%.2f"|format(sale.shipping) }}'
+                external_order_number: '{{ sale.external_order_number|cleaned }}',
+                receipt_number: '{{ sale.receipt_number|cleaned }}',
+                customer_name: '{{ sale.customer.name|cleaned if sale.customer else 'N/A' }}',
+                total: {{ "%.2f"|format(sale.total) }},
+                tax: {{ "%.2f"|format(sale.tax) }},
+                shipping: {{ "%.2f"|format(sale.shipping) }}
             },
             {% endfor %}
         ],
@@ -258,7 +277,24 @@ document.addEventListener('DOMContentLoaded', function() {
     var gridDiv = document.querySelector('#salesGrid');
     gridApi = agGrid.createGrid(gridDiv, gridOptions);
 
+    // Only advertise the pending queue when something is actually waiting
+    fetch('/api/pending_orders/count')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.count) {
+                document.getElementById('pendingOrdersCount').textContent = data.count;
+                document.getElementById('pendingOrdersLink').style.display = '';
+            }
+        })
+        .catch(function() { /* the link just stays hidden */ });
 
+    // Free-text search across every column, alongside the per-column filters
+    var quickFilter = document.getElementById('salesQuickFilter');
+    if (quickFilter) {
+        quickFilter.addEventListener('input', function() {
+            gridApi.setGridOption('quickFilterText', this.value);
+        });
+    }
 
     // Check if we need to open the modal with pre-populated customer
     const urlParams = new URLSearchParams(window.location.search);
@@ -513,17 +549,17 @@ $(document).ready(function() {
                 total: currencyInputs.total.getRawValue(),
                 customer_notes: $("#customer_notes").val(),
                 internal_notes: $("#internal_notes").val(),
-                shipstation_order_id: $("#shipstation_order_id").val(),
+                external_order_number: $("#external_order_number").val(),
             }),
             contentType: "application/json",
-            success: function() {
+            success: function(response) {
                 $('#customer').prop('disabled', false);
                 modal.hide();
                 refreshGrid('/api/sales', gridApi);
+                showFlashMessage('Sale #' + response.id + ' saved.', 'success');
             },
             error: function(xhr) {
-                var message = (xhr.responseJSON && xhr.responseJSON.error) || "Unexpected server error";
-                alert("Error saving sale: " + message);
+                showFlashMessage('Error saving sale: ' + serverMessage(xhr), 'error');
             }
         });
     });
