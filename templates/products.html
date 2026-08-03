@@ -4,8 +4,21 @@
 {% block title %}Products{% endblock %}
 
 {% block content %}
-<h1>Products</h1>
-<button id="addProductBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Product</button>
+<div class="page-header">
+    <div>
+        <h1>Products</h1>
+        <p class="page-subtitle">Catalogue, costs and the datasheets that ship with each item.</p>
+    </div>
+</div>
+<div class="toolbar">
+    <button id="addProductBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Product</button>
+    <div class="toolbar-spacer"></div>
+    <input type="search" id="productSearch" class="form-control" style="max-width: 260px;"
+           placeholder="Search products…">
+    <label class="form-check-label" style="display:inline-flex; align-items:center; gap:6px;">
+        <input type="checkbox" id="showArchived"> Show archived
+    </label>
+</div>
 <div id="productsGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
 {% endblock %}
 
@@ -16,31 +29,86 @@
         <h2 id="modalTitle">Add Product</h2>
         <form id="productForm" method="POST">
             <input type="hidden" id="productId" name="id">
-            <div class="form-group">
-                <label for="sku">SKU</label>
-                <input type="text" id="sku" name="sku" required>
+
+            <fieldset>
+                <legend>Identity</legend>
+                <div class="form-group">
+                    <label for="sku">SKU</label>
+                    <input type="text" id="sku" name="sku" maxlength="20" required>
+                    <p class="form-hint" id="skuHint">Up to 20 characters, unique across the catalogue.</p>
+                </div>
+                <div class="form-group">
+                    <label for="description">Description</label>
+                    <input type="text" id="description" name="description" maxlength="200" required>
+                </div>
+                <div class="form-group">
+                    <label for="category">Category</label>
+                    <input type="text" id="category" name="category" maxlength="60" list="categoryList">
+                    <datalist id="categoryList"></datalist>
+                </div>
+                <div class="form-group">
+                    <label for="vendor">Vendor</label>
+                    <input type="text" id="vendor" name="vendor" maxlength="120" list="vendorList">
+                    <datalist id="vendorList"></datalist>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Money &amp; shipping</legend>
+                <div class="form-group">
+                    <label for="price">Price <span class="form-hint">what the customer pays</span></label>
+                    <input type="text" id="price" name="price" required>
+                </div>
+                <div class="form-group">
+                    <label for="cost">Cost <span class="form-hint">what we pay — optional</span></label>
+                    <input type="text" id="cost" name="cost">
+                    <p class="form-hint" id="marginHint"></p>
+                </div>
+                <div class="form-group">
+                    <label for="weightOz">Shipping weight (oz)</label>
+                    <input type="number" id="weightOz" name="weight_oz" step="0.01" min="0">
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Flags</legend>
+                <div class="form-group">
+                    <label for="isManufactured">
+                        <input type="checkbox" id="isManufactured" name="is_manufactured">
+                        Manufactured in WA (counts toward B&amp;O manufacturing)
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="isArchived">
+                        <input type="checkbox" id="isArchived" name="archived">
+                        Archived (hidden from new-sale product lists)
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="notes">Notes</label>
+                    <textarea id="notes" name="notes" rows="3"></textarea>
+                </div>
+            </fieldset>
+
+            {# Attachments need a product id to hang off, so this only appears on edit #}
+            <fieldset id="attachmentsSection" hidden>
+                <legend>Datasheets &amp; attachments</legend>
+                <p class="form-hint">
+                    Files offered for printing on the receipt of any sale containing this
+                    product. PDF, images, text or Office documents.
+                </p>
+                <div id="attachmentList"></div>
+                <div class="form-group">
+                    <input type="file" id="attachmentFiles" multiple
+                           accept=".pdf,.png,.jpg,.jpeg,.gif,.txt,.csv,.doc,.docx,.xls,.xlsx">
+                    <button type="button" id="uploadAttachmentBtn" class="btn btn-secondary">
+                        <i class="fas fa-upload"></i> Upload</button>
+                </div>
+            </fieldset>
+
+            <div class="actions">
+                <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Product</button>
             </div>
-            <div class="form-group">
-                <label for="description">Description</label>
-                <input type="text" id="description" name="description" required>
-            </div>
-            <div class="form-group">
-                <label for="price">Price</label>
-                <input type="text" id="price" name="price" required>
-            </div>
-            <div class="form-group">
-                <label for="isManufactured">
-                    <input type="checkbox" id="isManufactured" name="is_manufactured">
-                    Manufactured in WA (counts toward B&amp;O manufacturing)
-                </label>
-            </div>
-            <div class="form-group">
-                <label for="isArchived">
-                    <input type="checkbox" id="isArchived" name="archived">
-                    Archived (hidden from new-sale product lists)
-                </label>
-            </div>
-            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Product</button>
         </form>
     </div>
 </div>
@@ -90,9 +158,21 @@
                 },
                 { headerName: 'SKU', field: 'sku', sortable: true, sort: 'asc', filter: true },
                 { headerName: 'Description', field: 'description', sortable: true, filter: true },
-                { headerName: 'Price', field: 'price',
-                    valueFormatter: p => '$' + p.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                { headerName: 'Category', field: 'category', maxWidth: 150, sortable: true, filter: true },
+                { headerName: 'Vendor', field: 'vendor', maxWidth: 160, sortable: true, filter: true },
+                { headerName: 'Price', field: 'price', valueFormatter: money,
                     sortable: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
+                { headerName: 'Cost', field: 'cost', valueFormatter: money,
+                    sortable: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator },
+                { headerName: 'Margin', field: 'margin', maxWidth: 120, sortable: true,
+                    filter: 'agNumberColumnFilter', comparator: greaterlessComparator,
+                    valueFormatter: p => p.value === null || p.value === undefined ? '—' : money(p) },
+                { headerName: 'Oz', field: 'weight_oz', maxWidth: 90, sortable: true,
+                    filter: 'agNumberColumnFilter', comparator: greaterlessComparator,
+                    valueFormatter: p => p.value ? p.value.toFixed(2) : '' },
+                { headerName: 'Files', field: 'attachment_count', maxWidth: 90, sortable: true,
+                    cellRenderer: p => p.value ? '<i class="fas fa-paperclip"></i> ' + p.value : ''
+                },
                 { headerName: 'Manufactured', field: 'is_manufactured', maxWidth: 140, sortable: true, filter: true,
                     cellRenderer: params => params.value ? '<i class="fas fa-check"></i>' : ''
                 },
@@ -102,6 +182,10 @@
             ],
             // Data is loaded from /api/products (see below), not embedded in the page
             rowData: [],
+            // Archived products are hidden until asked for; they are still in the
+            // catalogue for historical sales, just not part of day-to-day work
+            isExternalFilterPresent: () => !$('#showArchived').prop('checked'),
+            doesExternalFilterPass: node => !node.data || !node.data.archived,
             getRowStyle: params => params.data && params.data.archived ? { opacity: '0.5' } : null,
             defaultColDef: {
                 flex: 1,
@@ -117,8 +201,34 @@
 
         var gridDiv = document.querySelector('#productsGrid');
         gridApi = agGrid.createGrid(gridDiv, gridOptions);
-        refreshGrid('/api/products', gridApi);
+        reloadProducts();
+
+        $('#showArchived').change(() => gridApi.onFilterChanged());
+        $('#productSearch').on('input', function() {
+            gridApi.setGridOption('quickFilterText', this.value);
+        });
     });
+
+    function money(p) {
+        return '$' + (p.value || 0).toLocaleString(undefined,
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    // Kept so the add/edit form can suggest values already in use
+    var knownCategories = [], knownVendors = [], knownSkus = [];
+
+    function reloadProducts() {
+        return $.getJSON('/api/products', function(rows) {
+            gridApi.setGridOption('rowData', rows);
+            knownSkus = rows.map(r => (r.sku || '').toUpperCase());
+            knownCategories = [...new Set(rows.map(r => r.category).filter(Boolean))].sort();
+            knownVendors = [...new Set(rows.map(r => r.vendor).filter(Boolean))].sort();
+            $('#categoryList').html(knownCategories.map(v => `<option value="${v}">`).join(''));
+            $('#vendorList').html(knownVendors.map(v => `<option value="${v}">`).join(''));
+        }).fail(function() {
+            showFlashMessage('Could not load products — reload the page.', 'error');
+        });
+    }
 
     function serverError(xhr) {
         return (xhr.responseJSON && xhr.responseJSON.error) || "Unexpected server error";
@@ -129,10 +239,11 @@
             url: "/products/archive/" + productId,
             method: "POST",
             success: function() {
-                refreshGrid('/api/products', gridApi);
+                reloadProducts();
+                showFlashMessage('Product archived.', 'success');
             },
             error: function(xhr) {
-                alert("Error archiving product: " + serverError(xhr));
+                showFlashMessage("Error archiving product: " + serverError(xhr), 'error');
             }
         });
     }
@@ -142,7 +253,8 @@
             url: "/products/delete/" + productId,
             method: "POST",
             success: function() {
-                refreshGrid('/api/products', gridApi);
+                reloadProducts();
+                showFlashMessage('Product deleted.', 'success');
             },
             error: function(xhr) {
                 if (xhr.status === 409) {
@@ -150,24 +262,110 @@
                         archiveProduct(productId);
                     }
                 } else {
-                    alert("Error deleting product: " + serverError(xhr));
+                    showFlashMessage("Error deleting product: " + serverError(xhr), 'error');
                 }
             }
         });
     }
 
     function editProduct(productId) {
-        // Implement edit functionality (e.g., open modal)
         $("#modalTitle").text("Edit Product");
-        $.get("/api/product/" + productId, function(data) {
+        $.getJSON("/api/product/" + productId, function(data) {
             $("#productId").val(data.id);
             $("#sku").val(data.sku);
             $("#description").val(data.description);
-            $("#price").val(('$' + data.price.toFixed(2).replace(/\B(?=(?:\d{3})+(?!\d))/g, ',')));
+            $("#category").val(data.category || '');
+            $("#vendor").val(data.vendor || '');
+            priceCleave.setRawValue(data.price.toFixed(2));
+            costCleave.setRawValue(data.cost ? data.cost.toFixed(2) : '');
+            $("#weightOz").val(data.weight_oz || '');
+            $("#notes").val(data.notes || '');
             $("#isManufactured").prop("checked", data.is_manufactured);
             $("#isArchived").prop("checked", data.archived);
+            updateMarginHint();
+            checkSku();
+            showAttachments(data.id);
             $("#productModal").show();
+        }).fail(function(xhr) {
+            showFlashMessage('Could not load that product: ' + serverError(xhr), 'error');
         });
+    }
+
+    // ---- Attachments (F1). Only available once the product exists, since the
+    // upload has to be filed against a product id.
+    function showAttachments(productId) {
+        $('#attachmentsSection').prop('hidden', false);
+        $('#attachmentFiles').val('');
+        renderAttachments(productId);
+    }
+
+    function renderAttachments(productId) {
+        $.getJSON('/api/products/' + productId + '/attachments', function(files) {
+            if (!files.length) {
+                $('#attachmentList').html('<p class="form-hint">No files attached yet.</p>');
+                return;
+            }
+            var rows = files.map(function(f) {
+                return `
+                  <div class="form-group" style="display:flex; align-items:center; gap:8px;">
+                    <a href="${f.url}" target="_blank" rel="noopener" style="flex:1 1 auto;">
+                        <i class="fas fa-file"></i> ${$('<div>').text(f.name).html()}</a>
+                    <span class="badge badge-muted">${f.size_label}</span>
+                    <label class="form-check-label" style="display:inline-flex; align-items:center; gap:4px;">
+                        <input type="checkbox" class="attach-print" data-id="${f.id}"
+                               ${f.print_with_receipt ? 'checked' : ''}> print
+                    </label>
+                    <button type="button" class="btn btn-danger attach-delete" data-id="${f.id}">
+                        <i class="fas fa-trash"></i></button>
+                  </div>`;
+            });
+            $('#attachmentList').html(rows.join(''));
+        });
+    }
+
+    $(document).on('click', '.attach-delete', function() {
+        if (!confirm('Delete this file?')) { return; }
+        var productId = $('#productId').val();
+        $.post('/products/attachments/' + $(this).data('id') + '/delete')
+            .done(function() { renderAttachments(productId); reloadProducts(); })
+            .fail(function(xhr) {
+                showFlashMessage('Could not delete: ' + serverError(xhr), 'error');
+            });
+    });
+
+    $(document).on('change', '.attach-print', function() {
+        var checked = $(this).prop('checked');
+        $.ajax({
+            url: '/products/attachments/' + $(this).data('id') + '/print_flag',
+            method: 'POST',
+            data: JSON.stringify({ print_with_receipt: checked }),
+            contentType: 'application/json'
+        }).fail(function(xhr) {
+            showFlashMessage('Could not update that file: ' + serverError(xhr), 'error');
+        });
+    });
+
+    var priceCleave, costCleave;
+
+    function updateMarginHint() {
+        var price = parseFloat(priceCleave.getRawValue()) || 0;
+        var cost = parseFloat(costCleave.getRawValue()) || 0;
+        if (!cost) { $('#marginHint').text(''); return; }
+        var margin = price - cost;
+        var pct = price ? (margin / price * 100).toFixed(1) : '0.0';
+        $('#marginHint').text(`Margin $${margin.toFixed(2)} (${pct}% of price).`);
+    }
+
+    // Warn about a duplicate SKU before the round trip; the server still enforces
+    // it with a unique constraint and answers 409.
+    function checkSku() {
+        var sku = ($('#sku').val() || '').trim().toUpperCase();
+        var editingId = $('#productId').val();
+        var clash = sku && knownSkus.includes(sku) && !editingId;
+        $('#skuHint')
+            .text(clash ? `A product with SKU "${sku}" already exists.`
+                        : 'Up to 20 characters, unique across the catalogue.')
+            .css('color', clash ? 'var(--danger)' : '');
     }
 
     $(document).ready(function() {
@@ -175,54 +373,108 @@
         var addBtn = $("#addProductBtn");
         var closeBtn = $(".close");
         var form = $("#productForm");
-    
-        // Initialize Cleave.js for price formatting
-        var cleave = new Cleave('#price', {
+
+        var cleaveOptions = {
             numeral: true,
             numeralThousandsGroupStyle: 'thousand',
             prefix: '$',
             rawValueTrimPrefix: true
-        });
-    
+        };
+        priceCleave = new Cleave('#price', cleaveOptions);
+        costCleave = new Cleave('#cost', cleaveOptions);
+
+        $('#price, #cost').on('input', updateMarginHint);
+        $('#sku').on('input', checkSku);
+
         addBtn.click(function() {
             $("#modalTitle").text("Add Product");
             form[0].reset();
             $("#productId").val("");
-            cleave.setRawValue('');
+            priceCleave.setRawValue('');
+            costCleave.setRawValue('');
+            $('#marginHint').text('');
+            // No product id yet, so there is nothing to attach files to
+            $('#attachmentsSection').prop('hidden', true);
+            checkSku();
             modal.show();
         });
-    
-        closeBtn.click(function() {
-            modal.hide();
-        });
-    
+
+        closeBtn.click(function() { modal.hide(); });
+
         $(window).click(function(event) {
-            if (event.target == modal[0]) {
-                modal.hide();
-            }
+            if (event.target == modal[0]) { modal.hide(); }
         });
-    
+
+        $('#uploadAttachmentBtn').click(function() {
+            var productId = $('#productId').val();
+            var files = $('#attachmentFiles')[0].files;
+            if (!productId || !files.length) {
+                showFlashMessage('Choose a file first.', 'warning');
+                return;
+            }
+            var data = new FormData();
+            for (var i = 0; i < files.length; i++) { data.append('files', files[i]); }
+
+            var $btn = $(this).prop('disabled', true);
+            $.ajax({
+                url: '/products/' + productId + '/attachments',
+                method: 'POST',
+                data: data, processData: false, contentType: false
+            }).done(function(response) {
+                $('#attachmentFiles').val('');
+                renderAttachments(productId);
+                reloadProducts();
+                if (response.rejected && response.rejected.length) {
+                    showFlashMessage('Some files were not accepted: ' + response.rejected.join('; '),
+                                     'warning');
+                } else {
+                    showFlashMessage('Uploaded.', 'success');
+                }
+            }).fail(function(xhr) {
+                showFlashMessage('Upload failed: ' + serverError(xhr), 'error');
+            }).always(function() {
+                $btn.prop('disabled', false);
+            });
+        });
+
         form.submit(function(e) {
             e.preventDefault();
-            var url = $("#productId").val() ? "/products/edit/" + $("#productId").val() : "/products/add";
+            var editingId = $("#productId").val();
+            var url = editingId ? "/products/edit/" + editingId : "/products/add";
+            var $save = form.find('button[type="submit"]').prop('disabled', true);
             $.ajax({
                 url: url,
                 method: "POST",
                 data: JSON.stringify({
                     sku: $("#sku").val(),
                     description: $("#description").val(),
-                    price: cleave.getRawValue(),
+                    price: priceCleave.getRawValue(),
+                    cost: costCleave.getRawValue(),
+                    weight_oz: $("#weightOz").val(),
+                    category: $("#category").val(),
+                    vendor: $("#vendor").val(),
+                    notes: $("#notes").val(),
                     is_manufactured: $("#isManufactured").prop("checked"),
                     archived: $("#isArchived").prop("checked")
                 }),
-                contentType: "application/json",
-                success: function() {
+                contentType: "application/json"
+            }).done(function(response) {
+                reloadProducts();
+                if (editingId) {
                     modal.hide();
-                    refreshGrid('/api/products', gridApi);
-                },
-                error: function(xhr) {
-                    alert("Error saving product: " + serverError(xhr));
+                    showFlashMessage('Product saved.', 'success');
+                } else {
+                    // Keep the dialog open on the new product so datasheets can be
+                    // attached straight away, rather than reopening it to do so
+                    $("#productId").val(response.id);
+                    $("#modalTitle").text("Edit Product");
+                    showAttachments(response.id);
+                    showFlashMessage('Product created — you can attach datasheets now.', 'success');
                 }
+            }).fail(function(xhr) {
+                showFlashMessage("Error saving product: " + serverError(xhr), 'error');
+            }).always(function() {
+                $save.prop('disabled', false);
             });
         });
     });

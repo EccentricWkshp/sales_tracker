@@ -3,9 +3,10 @@ import base64
 import click
 from collections import namedtuple
 import csv
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from flask import Flask, abort, render_template, request, redirect, url_for, flash, jsonify
+from flask import (Flask, abort, render_template, request, redirect, url_for, flash,
+                   jsonify, send_from_directory)
 from flask.cli import with_appcontext
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user
 from flask_migrate import Migrate
@@ -23,13 +24,14 @@ import pycountry
 import random
 import re
 import requests
+import secrets
 from sqlalchemy import event, func
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError, OperationalError
 from sqlalchemy.orm import joinedload
 import sqlite3
 import time
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, urlencode, urlparse
 import uuid
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -326,14 +328,74 @@ class Product(db.Model):
     # history can only be archived, never deleted
     archived = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
 
+    # What we pay for it, for margin. Kept separate from `price`, which is what
+    # the customer pays and is the only figure any report currently uses.
+    cost = db.Column(db.Numeric(10, 2), nullable=False, default=0, server_default='0')
+    # Shipping weight in ounces — the unit the carriers' rate tables use
+    weight_oz = db.Column(db.Numeric(10, 2), nullable=False, default=0, server_default='0')
+    category = db.Column(db.String(60), nullable=False, default='', server_default='')
+    vendor = db.Column(db.String(120), nullable=False, default='', server_default='')
+    # Free text: build notes, substitutions, anything that does not fit a column
+    notes = db.Column(db.Text, nullable=False, default='', server_default='')
+
+    attachments = db.relationship('ProductAttachment', back_populates='product',
+                                  cascade='all, delete-orphan', lazy=True)
+
+    @property
+    def margin(self):
+        """Price minus cost, or None when no cost has been recorded."""
+        if not self.cost:
+            return None
+        return Decimal(self.price) - Decimal(self.cost)
+
     def to_dict(self):
+        margin = self.margin
         return {
             'id': self.id,
             'sku': self.sku,
             'description': self.description,
             'price': float(self.price),
             'is_manufactured': self.is_manufactured,
-            'archived': self.archived
+            'archived': self.archived,
+            'cost': float(self.cost or 0),
+            'weight_oz': float(self.weight_oz or 0),
+            'category': self.category or '',
+            'vendor': self.vendor or '',
+            'notes': self.notes or '',
+            'margin': float(margin) if margin is not None else None,
+            'attachment_count': len(self.attachments),
+        }
+
+class ProductAttachment(db.Model):
+    """A file that belongs to a product — typically a datasheet to ship with it.
+
+    The uploaded bytes live under instance/product_attachments/ rather than
+    static/, so they are only reachable through a login-required route. The name
+    on disk is generated: an operator's filename would otherwise decide a path.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False, index=True)
+    stored_name = db.Column(db.String(120), nullable=False)
+    original_name = db.Column(db.String(255), nullable=False)
+    content_type = db.Column(db.String(100), nullable=False, default='', server_default='')
+    size_bytes = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    # Offered on the receipt's print page when the product is on that sale
+    print_with_receipt = db.Column(db.Boolean, nullable=False, default=True, server_default='1')
+
+    product = db.relationship('Product', back_populates='attachments')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'product_id': self.product_id,
+            'name': self.original_name,
+            'content_type': self.content_type,
+            'size_bytes': self.size_bytes,
+            'size_label': human_size(self.size_bytes),
+            'uploaded_at': self.uploaded_at.strftime('%Y-%m-%d') if self.uploaded_at else '',
+            'print_with_receipt': self.print_with_receipt,
+            'url': url_for('download_product_attachment', id=self.id),
         }
 
 class SalesReceipt(db.Model):
@@ -464,6 +526,50 @@ class ShopifyCredentials(db.Model):
 
     enabled = db.Column(db.Boolean, default=False, nullable=False)
     webhooks_enabled = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
+
+class OAuthCredentialsMixin:
+    """Token columns shared by every marketplace that needs OAuth 2.0 consent.
+
+    Etsy and eBay differ in which fields identify the app and in their endpoints,
+    but not in what has to be persisted: a short-lived access token, the
+    long-lived refresh token that renews it, and the one-shot state the consent
+    redirect has to carry across the round trip.
+
+    Tokens are Text rather than String because eBay user tokens run to a few
+    thousand characters — a String(255) would truncate silently on some backends.
+    """
+    access_token = db.Column(db.Text, nullable=False, default='', server_default='')
+    refresh_token = db.Column(db.Text, nullable=False, default='', server_default='')
+    access_token_expires_at = db.Column(db.DateTime, nullable=True)
+    refresh_token_expires_at = db.Column(db.DateTime, nullable=True)
+    # CSRF nonce and PKCE verifier, held only between "Connect" and the callback
+    oauth_state = db.Column(db.String(64), nullable=False, default='', server_default='')
+    oauth_verifier = db.Column(db.String(128), nullable=False, default='', server_default='')
+
+class EtsyCredentials(OAuthCredentialsMixin, db.Model):
+    """One Etsy shop. `client_id` is the app's keystring, `client_secret` its
+    shared secret. `shop_id` is the numeric shop id the receipts endpoint needs —
+    it is discovered automatically once connected."""
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.String(120), nullable=False, default='', server_default='')
+    client_secret = db.Column(db.String(120), nullable=False, default='', server_default='')
+    shop_id = db.Column(db.String(50), nullable=False, default='', server_default='')
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
+
+class EbayCredentials(OAuthCredentialsMixin, db.Model):
+    """One eBay seller account.
+
+    `client_id` is the App ID (Client ID) and `client_secret` the Cert ID.
+    `ru_name` is eBay's RuName — the *alias* for your redirect URI, which is what
+    the authorize and token calls send instead of the URL itself.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.String(120), nullable=False, default='', server_default='')
+    client_secret = db.Column(db.String(120), nullable=False, default='', server_default='')
+    ru_name = db.Column(db.String(200), nullable=False, default='', server_default='')
+    # Sandbox has entirely different hosts; keeping it a flag avoids a second row
+    sandbox = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
 
 class PendingOrder(db.Model):
     """An imported order held back because the platform withheld the buyer's details.
@@ -618,10 +724,6 @@ def index():
         .order_by(SalesReceipt.date.desc()).limit(10).all()
     company_info = CompanyInfo.get_info()
 
-    def is_enabled(model):
-        credentials = model.query.first()
-        return bool(credentials and credentials.enabled)
-
     return render_template('index.html',
                            pending_order_count=PendingOrder.query.count(),
                            total_revenue=total_revenue,
@@ -629,10 +731,29 @@ def index():
                            total_customers=total_customers,
                            recent_sales=recent_sales,
                            company_info=company_info,
-                           shippo_enabled=is_enabled(ShippoCredentials),
-                           shipstation_enabled=is_enabled(ShipStationCredentials),
-                           woocommerce_enabled=is_enabled(WooCommerceCredentials),
-                           shopify_enabled=is_enabled(ShopifyCredentials))
+                           enabled_integrations=enabled_integration_cards())
+
+# Font Awesome classes for the dashboard cards, by integration key
+INTEGRATION_ICONS = {
+    'shopify': 'fab fa-shopify',
+    'shipstation': 'fas fa-box-open',
+    'shippo': 'fas fa-shipping-fast',
+    'woocommerce': 'fab fa-wordpress',
+    'etsy': 'fab fa-etsy',
+    'ebay': 'fab fa-ebay',
+}
+
+def enabled_integration_cards():
+    """The dashboard's import cards, one per switched-on integration."""
+    return [
+        {
+            'key': spec.key,
+            'label': spec.label,
+            'icon': INTEGRATION_ICONS.get(spec.key, 'fas fa-plug'),
+            'fetch_url': url_for('fetch_integration_orders', key=spec.key),
+        }
+        for spec in integration_specs() if spec.is_enabled()
+    ]
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -665,15 +786,88 @@ def logout():
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
 
-# Each integration's Management form: field prefix, model, secret fields (never
-# echoed back to the browser) and plain fields (safe to render).
-INTEGRATION_FORMS = (
-    ('shippo', ShippoCredentials, ('api_key',), ()),
-    ('ss', ShipStationCredentials, ('api_key', 'api_secret'), ()),
-    ('wc', WooCommerceCredentials, ('api_key', 'api_secret'), ()),
-    ('shopify', ShopifyCredentials,
-     ('api_key', 'api_secret', 'client_id', 'client_secret'), ('shop_domain',)),
-)
+class IntegrationSpec:
+    """Everything the app needs to know about one order source.
+
+    Adding a marketplace should be: write its `fetch` and `process` functions,
+    declare a credentials model, and append one entry to INTEGRATIONS. The
+    Management form, the environment-variable overrides, the dashboard card, the
+    fetch route and the OAuth round trip are all driven from here rather than
+    hand-written per platform, which is what they used to be.
+
+    key           value stored in SalesReceipt.source; also the URL segment
+    form_prefix   Management field prefix (legacy names differ from the key)
+    secret_fields never echoed back to the browser
+    plain_fields  safe to render
+    bool_fields   checkboxes beyond the standard `enabled`
+    env_fields    {field: (VAR, VAR2, ...)} — set any and it wins over the database
+    fetch         (credentials, start_date, end_date) -> raw platform orders
+    process       (raw orders) -> the shape import_processed_orders wants
+    oauth         OAuthSpec when the platform needs a consent round trip
+    """
+
+    def __init__(self, key, label, model, form_prefix=None, secret_fields=(),
+                 plain_fields=(), bool_fields=(), env_fields=None,
+                 fetch=None, process=None, enrich=None, oauth=None, blurb='',
+                 empty_message=None, field_labels=None, field_hints=None):
+        self.key = key
+        self.label = label
+        self.model = model
+        self.form_prefix = form_prefix or key
+        self.secret_fields = tuple(secret_fields)
+        self.plain_fields = tuple(plain_fields)
+        self.bool_fields = tuple(bool_fields)
+        self.env_fields = env_fields or {}
+        self.fetch = fetch
+        self.process = process
+        # (credentials) -> per-order callback, for platforms needing a second
+        # call per order. ShipStation's shipment lookup is the only one so far.
+        self.enrich = enrich
+        self.oauth = oauth
+        self.blurb = blurb
+        self.empty_message = empty_message
+        # Storage stays generic (client_id/client_secret) because the OAuth
+        # machinery is shared, but each marketplace names those things its own
+        # way — Etsy says keystring and shared secret, eBay says App ID and Cert
+        # ID. Show the operator the words their developer console uses.
+        self.field_labels = field_labels or {}
+        self.field_hints = field_hints or {}
+
+    @property
+    def fields(self):
+        return self.secret_fields + self.plain_fields
+
+    def label_for(self, field):
+        return self.field_labels.get(field) or field.replace('_', ' ').title()
+
+    def hint_for(self, field):
+        return self.field_hints.get(field, '')
+
+    def credentials(self):
+        return self.model.query.first()
+
+    def env_value(self, field):
+        for name in self.env_fields.get(field, ()):
+            value = (os.environ.get(name) or '').strip()
+            if value:
+                return value
+        return ''
+
+    def setting(self, credentials, field):
+        """Resolve one credential field: environment first, then the database."""
+        return self.env_value(field) or (getattr(credentials, field, '') or '').strip()
+
+    def is_enabled(self):
+        record = self.credentials()
+        return bool(record and record.enabled)
+
+# Populated at the bottom of the integrations section, once each platform's
+# fetch/process functions exist. Keyed by SalesReceipt.source value.
+INTEGRATIONS = {}
+
+def integration_specs():
+    """Registry entries in display order."""
+    return list(INTEGRATIONS.values())
 
 def _save_integration_credentials(form):
     """Apply the Management form to every integration's stored credentials.
@@ -681,29 +875,39 @@ def _save_integration_credentials(form):
     Secret fields render blank with a "saved" hint, so a blank submission means
     "leave unchanged" — secrets never round-trip through the page HTML.
     """
-    for prefix, model, secret_fields, plain_fields in INTEGRATION_FORMS:
-        record = model.query.first()
+    for spec in integration_specs():
+        record = spec.credentials()
+        prefix = spec.form_prefix
         submitted = {
             field: (form.get(f'{prefix}_{field}') or '').strip()
-            for field in secret_fields + plain_fields
+            for field in spec.fields
         }
         enabled = f'{prefix}_enabled' in form
+        flags = {field: f'{prefix}_{field}' in form for field in spec.bool_fields}
 
         if record is None:
             # Don't create an empty row for an integration that was never touched
             if not any(submitted.values()) and not enabled:
                 continue
-            record = model(**{field: submitted.get(field, '') for field in secret_fields + plain_fields})
+            record = spec.model(**{field: submitted.get(field, '') for field in spec.fields})
             record.enabled = enabled
+            for field, value in flags.items():
+                setattr(record, field, value)
             db.session.add(record)
             continue
 
-        for field in secret_fields:
+        for field in spec.secret_fields:
             if submitted[field]:
                 setattr(record, field, submitted[field])
-        for field in plain_fields:
+        for field in spec.plain_fields:
             setattr(record, field, submitted[field])
         record.enabled = enabled
+        for field, value in flags.items():
+            setattr(record, field, value)
+
+        # Re-authorising is required when the app identity itself changes
+        if spec.oauth and any(submitted.get(field) for field in ('client_id', 'client_secret')):
+            clear_oauth_tokens(record)
 
     shopify = ShopifyCredentials.query.first()
     if shopify:
@@ -768,20 +972,50 @@ def management():
     shopify = ShopifyCredentials.query.first()
     return render_template('management.html',
                          company_info=company_info,
-                         shippo_credentials=ShippoCredentials.query.first(),
-                         shipstation_credentials=ShipStationCredentials.query.first(),
-                         woocommerce_credentials=WooCommerceCredentials.query.first(),
+                         integrations=integration_views(),
                          shopify_credentials=shopify,
                          shopify_auth_mode=shopify_auth_mode(shopify) if shopify else 'token',
                          shopify_shop_domain=shopify_shop_domain(shopify) if shopify else '',
-                         # Which fields an environment variable is supplying, so the
-                         # page can say why editing one has no effect
-                         shopify_from_env={
-                             field: bool(shopify_env_value(field))
-                             for field in SHOPIFY_ENV_FIELDS
-                         },
                          shopify_token_expires_at=shopify.access_token_expires_at if shopify else None,
                          webhook_url=url_for('shopify_webhook', _external=True))
+
+def integration_views():
+    """One render-ready dict per integration, so the template stays declarative.
+
+    Deliberately carries no secret values — only whether each field is set, and
+    whether an environment variable is supplying it. See the note at the top of
+    management.html about why credentials never reach the page.
+    """
+    views = []
+    for spec in integration_specs():
+        credentials = spec.credentials()
+        views.append({
+            'key': spec.key,
+            'label': spec.label,
+            'blurb': spec.blurb,
+            'prefix': spec.form_prefix,
+            'enabled': bool(credentials and credentials.enabled),
+            'has_importer': spec.fetch is not None,
+            'secret_fields': spec.secret_fields,
+            'plain_fields': spec.plain_fields,
+            'saved': {field: bool((getattr(credentials, field, '') or '').strip())
+                      for field in spec.fields} if credentials else {},
+            # Not 'values': Jinja resolves attributes before items, so view.values
+            # would hand the template dict.values instead of this mapping
+            'field_values': {field: (getattr(credentials, field, '') or '')
+                             for field in spec.plain_fields} if credentials else {},
+            'flags': {field: bool(getattr(credentials, field, False))
+                      for field in spec.bool_fields} if credentials else {},
+            # Why editing a field might have no effect
+            'from_env': {field: bool(spec.env_value(field)) for field in spec.fields},
+            # bool_fields included: their checkbox needs a label too
+            'labels': {field: spec.label_for(field)
+                       for field in spec.fields + spec.bool_fields},
+            'hints': {field: spec.hint_for(field) for field in spec.fields},
+            'oauth': (dict(oauth_status(spec), docs_url=spec.oauth.docs_url)
+                      if spec.oauth else None),
+        })
+    return views
 
 @app.route('/state_taxes')
 @login_required
@@ -1051,6 +1285,19 @@ def products():
     # The grid loads its data from /api/products
     return render_template('products.html', company_info=CompanyInfo.get_info())
 
+def _parse_product_number(data, field, label):
+    """Parse an optional money/weight field. Returns (Decimal, error_message)."""
+    raw = str(data.get(field, '') or '').replace('$', '').replace(',', '').strip()
+    if not raw:
+        return Decimal('0'), None
+    try:
+        value = Decimal(raw)
+    except InvalidOperation:
+        return None, f'{label} must be a number'
+    if value < 0:
+        return None, f'{label} cannot be negative'
+    return value, None
+
 def _parse_product_payload(data):
     """Validate a product add/edit payload; returns (fields, error_message)."""
     sku = (data.get('sku') or '').strip()
@@ -1061,19 +1308,164 @@ def _parse_product_payload(data):
         return None, 'SKU must be 20 characters or fewer'
     if not description:
         return None, 'Description is required'
+    if len(description) > 200:
+        return None, 'Description must be 200 characters or fewer'
     try:
         price = Decimal(str(data.get('price', '')).replace('$', '').replace(',', '').strip())
     except InvalidOperation:
         return None, 'Price must be a number'
     if price < 0:
         return None, 'Price cannot be negative'
+
+    cost, error = _parse_product_number(data, 'cost', 'Cost')
+    if error:
+        return None, error
+    weight, error = _parse_product_number(data, 'weight_oz', 'Weight')
+    if error:
+        return None, error
+
     return {
         'sku': sku,
         'description': description,
         'price': price,
         'is_manufactured': bool(data.get('is_manufactured', False)),
         'archived': bool(data.get('archived', False)),
+        'cost': cost,
+        'weight_oz': weight,
+        'category': (data.get('category') or '').strip()[:60],
+        'vendor': (data.get('vendor') or '').strip()[:120],
+        'notes': (data.get('notes') or '').strip(),
     }, None
+
+# ---------------------------------------------------------------------------
+# Product attachments — datasheets and similar, printed alongside a receipt
+# ---------------------------------------------------------------------------
+
+PRODUCT_ATTACHMENT_DIR = os.path.join(app.instance_path, 'product_attachments')
+ATTACHMENT_EXTENSIONS = {'pdf', 'png', 'jpg', 'jpeg', 'gif', 'txt', 'csv',
+                         'doc', 'docx', 'xls', 'xlsx'}
+
+def human_size(num_bytes):
+    size = float(num_bytes or 0)
+    for unit in ('B', 'KB', 'MB'):
+        if size < 1024 or unit == 'MB':
+            return f'{size:.0f} {unit}' if unit == 'B' else f'{size:.1f} {unit}'
+        size /= 1024
+
+def attachment_extension(filename):
+    return filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+
+@app.route('/products/<int:id>/attachments', methods=['POST'])
+@login_required
+def upload_product_attachment(id):
+    """Attach a file to a product. Multipart, one or more files at a time."""
+    product = Product.query.get_or_404(id)
+    files = [f for f in request.files.getlist('files') if f and f.filename]
+    if not files:
+        return jsonify({'success': False, 'error': 'Choose a file to upload.'}), 400
+
+    os.makedirs(PRODUCT_ATTACHMENT_DIR, exist_ok=True)
+    saved, rejected = [], []
+    for file in files:
+        extension = attachment_extension(file.filename)
+        if extension not in ATTACHMENT_EXTENSIONS:
+            rejected.append(f'{file.filename} (.{extension or "no extension"} not allowed)')
+            continue
+
+        # The name on disk is ours, never the operator's — a filename is not a
+        # safe path component even after secure_filename
+        stored_name = f'{uuid.uuid4().hex}.{extension}'
+        path = os.path.join(PRODUCT_ATTACHMENT_DIR, stored_name)
+        file.save(path)
+
+        attachment = ProductAttachment(
+            product_id=product.id,
+            stored_name=stored_name,
+            original_name=secure_filename(file.filename)[:255] or f'file.{extension}',
+            content_type=(file.mimetype or '')[:100],
+            size_bytes=os.path.getsize(path),
+        )
+        db.session.add(attachment)
+        saved.append(attachment)
+
+    if not saved:
+        return jsonify({'success': False,
+                        'error': 'Nothing uploaded. ' + '; '.join(rejected)}), 400
+
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        for attachment in saved:
+            _remove_attachment_file(attachment.stored_name)
+        app.logger.error(f'Could not record attachments for product {id}: {e}')
+        return jsonify({'success': False, 'error': 'Could not save the attachment.'}), 500
+
+    return jsonify({'success': True,
+                    'attachments': [a.to_dict() for a in product.attachments],
+                    'rejected': rejected})
+
+def _remove_attachment_file(stored_name):
+    """Delete the bytes, tolerating a file already gone."""
+    try:
+        os.remove(os.path.join(PRODUCT_ATTACHMENT_DIR, stored_name))
+    except OSError:
+        pass
+
+@app.route('/products/attachments/<int:id>')
+@login_required
+def download_product_attachment(id):
+    attachment = ProductAttachment.query.get_or_404(id)
+    return send_from_directory(
+        PRODUCT_ATTACHMENT_DIR, attachment.stored_name,
+        # inline so a PDF opens in the browser's viewer, ready to print
+        as_attachment=False, download_name=attachment.original_name)
+
+@app.route('/products/attachments/<int:id>/delete', methods=['POST'])
+@login_required
+def delete_product_attachment(id):
+    attachment = ProductAttachment.query.get_or_404(id)
+    stored_name = attachment.stored_name
+    db.session.delete(attachment)
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f'Could not delete attachment {id}: {e}')
+        return jsonify({'success': False, 'error': 'Could not delete that file.'}), 500
+    _remove_attachment_file(stored_name)
+    return jsonify({'success': True})
+
+@app.route('/products/attachments/<int:id>/print_flag', methods=['POST'])
+@login_required
+def set_attachment_print_flag(id):
+    attachment = ProductAttachment.query.get_or_404(id)
+    attachment.print_with_receipt = bool((request.json or {}).get('print_with_receipt'))
+    db.session.commit()
+    return jsonify({'success': True, 'print_with_receipt': attachment.print_with_receipt})
+
+@app.route('/api/products/<int:id>/attachments')
+@login_required
+def get_product_attachments(id):
+    product = Product.query.get_or_404(id)
+    return jsonify([a.to_dict() for a in product.attachments])
+
+def receipt_datasheets(sale):
+    """Attachments to offer on a receipt's print page, de-duplicated.
+
+    Two line items for the same product must not print the same datasheet twice,
+    and neither should two products that share one.
+    """
+    seen, sheets = set(), []
+    for item in sale.line_items:
+        if not item.product:
+            continue
+        for attachment in item.product.attachments:
+            if not attachment.print_with_receipt or attachment.id in seen:
+                continue
+            seen.add(attachment.id)
+            sheets.append({'product': item.product, 'attachment': attachment})
+    return sheets
 
 @app.route('/products/add', methods=['POST'])
 @login_required
@@ -1165,80 +1557,121 @@ def _parse_money(value, field):
         raise ValueError(f'{field} cannot be negative')
     return amount
 
-@app.route('/sales/add', methods=['POST'])
-@login_required
-def add_sale():
-    data = request.json or {}
+def parse_sale_payload(data):
+    """Validate a hand-entered sale into model-ready values. Raises ValueError.
+
+    Shared by add_sale and edit_sale so the two cannot drift apart again. The
+    edit route used to read `request.form` directly: it raised KeyError on any
+    missing field, rejected '$1,234.56' because it called Decimal() rather than
+    _parse_money, accepted a quantity of zero, and — the one that actually
+    corrupts data — stored whatever `total` the client posted instead of
+    computing it. The returned `total` is always line items + tax + shipping.
+
+    `items` comes back as (product_id, quantity, price_each, total_price) tuples.
+    """
+    try:
+        customer_id = int(data.get('customer_id') or 0)
+    except (TypeError, ValueError):
+        raise ValueError('Customer is invalid')
+    if not customer_id:
+        raise ValueError('Customer is required')
+
+    if not data.get('date'):
+        raise ValueError('Date is required')
+    date_str = str(data['date']).strip()
+    time_str = str(data.get('time') or '').strip()
+    try:
+        # Either a date plus a separate optional time (the add-sale modal), or a
+        # single datetime-local value (the edit page). fromisoformat takes both
+        # "HH:MM" and "HH:MM:SS".
+        sale_date = datetime.fromisoformat(
+            f'{date_str}T{time_str}' if time_str and 'T' not in date_str else date_str)
+    except ValueError:
+        raise ValueError('Invalid date/time')
 
     try:
-        if not data.get('customer_id'):
-            raise ValueError('Customer is required')
-        customer_id = int(data['customer_id'])
+        shipdate = (datetime.strptime(data['shipdate'], '%Y-%m-%d').date()
+                    if data.get('shipdate') else None)
+    except (TypeError, ValueError):
+        raise ValueError('Invalid ship date')
 
-        if not data.get('date'):
-            raise ValueError('Date is required')
-        # Time is optional; fromisoformat accepts both "HH:MM" and "HH:MM:SS"
-        time_str = (data.get('time') or '').strip()
+    tax = _parse_money(data.get('tax'), 'Tax')
+    shipping = _parse_money(data.get('shipping'), 'Shipping')
+
+    if not data.get('line_items'):
+        raise ValueError('At least one product is required')
+    items = []
+    subtotal = Decimal('0')
+    for item in data['line_items']:
+        if not item.get('product_id'):
+            raise ValueError('Each line item needs a product selected')
         try:
-            sale_date = datetime.fromisoformat(
-                f"{data['date']}T{time_str}" if time_str else data['date'])
-        except ValueError:
-            raise ValueError('Invalid date/time')
-
-        shipdate = datetime.strptime(data['shipdate'], '%Y-%m-%d').date() if data.get('shipdate') else None
-
-        tax = _parse_money(data.get('tax'), 'Tax')
-        shipping = _parse_money(data.get('shipping'), 'Shipping')
-
-        if not data.get('line_items'):
-            raise ValueError('At least one product is required')
-        parsed_items = []
-        subtotal = Decimal('0')
-        for item in data['line_items']:
-            if not item.get('product_id'):
-                raise ValueError('Each line item needs a product selected')
+            product_id = int(item['product_id'])
             quantity = int(item.get('quantity') or 0)
-            if quantity < 1:
-                raise ValueError('Quantity must be at least 1')
-            price_each = _parse_money(item.get('price_each'), 'Price')
-            total_price = price_each * quantity
-            subtotal += total_price
-            parsed_items.append((int(item['product_id']), quantity, price_each, total_price))
-    except (ValueError, TypeError) as e:
-        return jsonify({'success': False, 'error': str(e)}), 400
+        except (TypeError, ValueError):
+            raise ValueError('Product and quantity must be numbers')
+        if quantity < 1:
+            raise ValueError('Quantity must be at least 1')
+        price_each = _parse_money(item.get('price_each'), 'Price')
+        total_price = price_each * quantity
+        subtotal += total_price
+        items.append((product_id, quantity, price_each, total_price))
 
-    new_sale = SalesReceipt(
-        customer_id=customer_id,
-        shipservice=data.get('shipservice') or None,
-        tracking=data.get('tracking') or None,
-        shipdate=shipdate,
-        date=sale_date,
-        # Computed here so the stored total always equals line items + tax + shipping
-        total=subtotal + tax + shipping,
-        tax=tax,
-        shipping=shipping,
-        customer_notes=data.get('customer_notes', ''),
-        internal_notes=data.get('internal_notes', ''),
-        external_order_number=data.get('external_order_number', ''),
-        # Marks the receipt as hand-entered so an import can never claim it
-        source='manual'
-    )
-    db.session.add(new_sale)
-    db.session.flush()
+    return {
+        'customer_id': customer_id,
+        'date': sale_date,
+        'shipdate': shipdate,
+        'shipservice': data.get('shipservice') or None,
+        'tracking': data.get('tracking') or None,
+        'tax': tax,
+        'shipping': shipping,
+        'total': subtotal + tax + shipping,
+        'customer_notes': data.get('customer_notes') or '',
+        'internal_notes': data.get('internal_notes') or '',
+        'external_order_number': data.get('external_order_number') or None,
+        'items': items,
+    }
 
-    # This assigns an ID to new_sale
-    new_sale.receipt_number = new_sale.id
-
-    for product_id, quantity, price_each, total_price in parsed_items:
+def write_sale_line_items(sale, items):
+    """Replace a receipt's line items with the parsed set from the operator."""
+    for existing in sale.line_items:
+        db.session.delete(existing)
+    if sale.line_items:
+        db.session.flush()
+    for product_id, quantity, price_each, total_price in items:
         db.session.add(LineItem(
-            receipt_id=new_sale.id,
+            receipt_id=sale.id,
             product_id=product_id,
             quantity=quantity,
             price_each=price_each,
             total_price=total_price
         ))
 
-    db.session.commit()
+@app.route('/sales/add', methods=['POST'])
+@login_required
+def add_sale():
+    try:
+        fields = parse_sale_payload(request.json or {})
+    except (ValueError, TypeError) as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+
+    items = fields.pop('items')
+    # Marks the receipt as hand-entered so an import can never claim it
+    new_sale = SalesReceipt(source='manual', **fields)
+    db.session.add(new_sale)
+    db.session.flush()
+
+    # The receipt number is Sales Tracker's own identifier — the receipt's id
+    new_sale.receipt_number = new_sale.id
+    write_sale_line_items(new_sale, items)
+
+    try:
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        app.logger.error(f"Error saving new sale: {e}")
+        return jsonify({'success': False, 'error': 'Could not save the sale.'}), 500
+
     return jsonify({'success': True, 'id': new_sale.id})
 
 @app.route('/sales/get/<int:id>')
@@ -1282,53 +1715,28 @@ def edit_sale(id):
     
     if request.method == 'POST':
         try:
-            app.logger.info(f"Received POST request to edit sale {id}")
-            app.logger.debug(f"Form data: {request.form}")
+            fields = parse_sale_payload(request.json or {})
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
 
-            # Update sale details
-            sale.customer_id = int(request.form['customer_id'])
-            sale.shipservice = request.form['shipservice']
-            sale.tracking = request.form['tracking']
-            sale.shipdate = datetime.strptime(request.form['shipdate'],  '%Y-%m-%d') if request.form['shipdate'] else None
-            sale.date = datetime.strptime(request.form['date'], '%Y-%m-%dT%H:%M')
-            sale.shipping = Decimal(request.form['shipping'])
-            sale.tax = Decimal(request.form['tax'])
-            sale.customer_notes = request.form['customer_notes']
-            sale.internal_notes = request.form['internal_notes']
-            sale.external_order_number = request.form.get('external_order_number') or None
+        items = fields.pop('items')
+        for field, value in fields.items():
+            setattr(sale, field, value)
+        # `source` is deliberately left alone. Correcting a typo on an imported
+        # receipt must not restamp it 'manual', and an adopted hand-entered sale
+        # must keep the 'manual' that protects its figures from the next import.
+        write_sale_line_items(sale, items)
 
-            # Handle line items
-            # First, remove all existing line items
-            for item in sale.line_items:
-                db.session.delete(item)
-            
-            # Now add new line items
-            product_ids = request.form.getlist('product_id[]')
-            quantities = request.form.getlist('quantity[]')
-            prices_each = request.form.getlist('price_each[]')
-            
-            for product_id, quantity, price_each in zip(product_ids, quantities, prices_each):
-                new_line_item = LineItem(
-                    receipt_id=sale.id,
-                    product_id=int(product_id),
-                    quantity=int(quantity),
-                    price_each=Decimal(price_each),
-                    total_price=Decimal(quantity) * Decimal(price_each)
-                )
-                db.session.add(new_line_item)
-
-            # Recalculate total
-            sale.total = Decimal(request.form['total'])
-
-            app.logger.info(f"Attempting to commit changes for sale {id}")
+        try:
             db.session.commit()
-            app.logger.info(f"Successfully updated sale {id}")
-            flash('Sale updated successfully', 'success')
-            return redirect(url_for('view_sale', id=sale.id))
-        except Exception as e:
+        except SQLAlchemyError as e:
             db.session.rollback()
-            app.logger.error(f"Error updating sale {id}: {str(e)}")
-            flash(f'Error updating sale: {str(e)}', 'error')
+            app.logger.error(f"Error updating sale {id}: {e}")
+            return jsonify({'success': False, 'error': 'Could not save the sale.'}), 500
+
+        app.logger.info(f"Updated sale {id}")
+        return jsonify({'success': True, 'id': sale.id,
+                        'redirect': url_for('view_sale', id=sale.id)})
 
     # For GET requests, render the edit form
     customers = Customer.query.all()
@@ -1488,37 +1896,26 @@ def delete_pending_order(id):
 @app.route('/sales/print/<int:id>')
 @login_required
 def print_sale(id):
-    sale = SalesReceipt.query.get_or_404(id)
+    sale = SalesReceipt.query.options(
+        joinedload(SalesReceipt.customer),
+        joinedload(SalesReceipt.line_items)
+            .joinedload(LineItem.product)
+            .joinedload(Product.attachments)
+    ).get_or_404(id)
     company_info = CompanyInfo.get_info()
 
-    return render_template('print_sale.html', sale=sale, company_info=company_info)
+    return render_template('print_sale.html', sale=sale, company_info=company_info,
+                           datasheets=receipt_datasheets(sale))
 
 @app.route('/api/sales')
 @login_required
 def get_SalesReceipt():
-    # Retrieve all sales receipts sorted by the 'date' field in descending order (newest first).
-    SalesReceipts = SalesReceipt.query.order_by(SalesReceipt.date.desc()).all()
-    SalesReceipts_dict = [SalesReceipt.to_dict() for SalesReceipt in SalesReceipts]
-
-    return jsonify(SalesReceipts_dict)
-
-''' route without date sorting just in case
-@app.route('/api/sales')
-@login_required
-def get_SalesReceipt():
-    SalesReceipts = SalesReceipt.query.all()
-    SalesReceipts_dict = [SalesReceipt.to_dict() for SalesReceipt in SalesReceipts]
-
-    return jsonify(SalesReceipts_dict)
-'''
-
-@app.route('/api/calculate_tax', methods=['POST'])
-@login_required
-def calculate_tax():
-    total = float(request.json['total'])
-    # Assuming a flat 1.5% B&O tax rate for this example
-    tax = total * 0.015
-    return jsonify({'tax': round(tax, 2)})
+    """All receipts, newest first. Backs the sales grid and banking.html."""
+    sales = (SalesReceipt.query
+             .options(joinedload(SalesReceipt.customer),
+                      joinedload(SalesReceipt.line_items).joinedload(LineItem.product))
+             .order_by(SalesReceipt.date.desc()).all())
+    return jsonify([sale.to_dict() for sale in sales])
 
 def require_integration(model, label):
     """Return (credentials, None) when an integration is usable, else (None, response)."""
@@ -1959,54 +2356,41 @@ def shipment_fields(shipment_payload):
             app.logger.warning(f"Unparseable ShipStation shipDate: {shipment['shipDate']!r}")
     return fields
 
+def shipstation_fetch_orders(credentials, start_date, end_date):
+    """Page ShipStation's shipped orders over a date range."""
+    all_orders = []
+    page = 1
+    while True:
+        response = integration_request(
+            'GET', 'https://ssapi.shipstation.com/orders', 'ShipStation',
+            params={
+                'orderDateStart': start_date.isoformat(),
+                'orderDateEnd': end_date.isoformat(),
+                'orderStatus': 'shipped',
+                'pageSize': 500,  # Maximum allowed by ShipStation
+                'page': page,
+            },
+            auth=(credentials.api_key, credentials.api_secret))
+        data = response.json()
+        all_orders.extend(data.get('orders', []))
+        if page >= data.get('pages', 1):
+            break
+        page += 1
+    return all_orders
+
+def shipstation_enrich(credentials):
+    """Per-order shipment lookup, run inside that order's savepoint so a failure
+    here only skips this one order."""
+    def attach_shipment(order):
+        order.update(shipment_fields(
+            shipstation_get_shipment(credentials, order['external_order_id'])))
+    return attach_shipment
+
 @app.route('/shipstation/fetch_orders', methods=['POST'])
 @login_required
 @retry_on_db_lock()
 def fetch_shipstation_orders():
-    credentials, error = require_integration(ShipStationCredentials, 'ShipStation')
-    if error:
-        return error
-
-    start_date = request.form.get('start_date')
-    end_date = request.form.get('end_date')
-    if not start_date or not end_date:
-        return jsonify({'error': 'Start date and end date are required'}), 400
-
-    all_orders = []
-    page = 1
-    try:
-        while True:
-            response = integration_request(
-                'GET', 'https://ssapi.shipstation.com/orders', 'ShipStation',
-                params={
-                    'orderDateStart': start_date,
-                    'orderDateEnd': end_date,
-                    'orderStatus': 'shipped',
-                    'pageSize': 500,  # Maximum allowed by ShipStation
-                    'page': page,
-                },
-                auth=(credentials.api_key, credentials.api_secret))
-            data = response.json()
-            all_orders.extend(data.get('orders', []))
-            if page >= data.get('pages', 1):
-                break
-            page += 1
-    except IntegrationError as e:
-        return jsonify({'error': str(e)}), 502
-
-    def attach_shipment(order):
-        """Per-order shipment lookup, run inside that order's savepoint so a
-        failure here only skips this one order."""
-        order.update(shipment_fields(
-            shipstation_get_shipment(credentials, order['external_order_id'])))
-
-    try:
-        result = import_processed_orders(
-            process_shipstation_data(all_orders), 'shipstation', enrich=attach_shipment)
-    except IntegrationError as e:
-        return jsonify({'error': str(e)}), 500
-
-    return import_response('ShipStation', result)
+    return run_integration_import('shipstation')
 
 @app.route('/shipstation/fetch_shipment/<int:id>', methods=['POST'])
 @login_required
@@ -2075,69 +2459,40 @@ def apply_incoming_notes(sale, notes):
         elif incoming not in existing:
             setattr(sale, field, f"{existing}\n{incoming}")
 
-@app.route('/shippo/fetch_orders', methods=['POST'])
-@login_required
-@retry_on_db_lock()
-def fetch_shippo_orders():
-    credentials, error = require_integration(ShippoCredentials, 'Shippo')
-    if error:
-        return error
-
-    start_date = request.form.get('start_date')
-    end_date = request.form.get('end_date')
-    if not start_date or not end_date:
-        return jsonify({'error': 'Start date and end date are required'}), 400
-
-    try:
-        start_formatted = datetime.strptime(start_date, '%Y-%m-%d').strftime('%Y-%m-%dT00:00:00')
-        end_formatted = datetime.strptime(end_date, '%Y-%m-%d').strftime('%Y-%m-%dT23:59:59')
-    except ValueError:
-        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
-
+def shippo_fetch_orders(credentials, start_date, end_date):
+    """Page Shippo's shipped orders over a date range."""
     headers = {
         'Authorization': f'ShippoToken {credentials.api_key}',
         'Content-Type': 'application/json'
     }
-
     all_orders = []
     page = 1
-    try:
-        while True:
-            response = integration_request(
-                'GET', 'https://api.goshippo.com/orders', 'Shippo',
-                params={
-                    'results': 25,  # Shippo's page size
-                    'page': page,
-                    'start_date': start_formatted,
-                    'end_date': end_formatted,
-                    'order_status[]': 'SHIPPED',
-                },
-                headers=headers)
-            data = response.json()
-            # Bodies are not logged: Shippo order payloads carry customer names,
-            # addresses and phone numbers, which do not belong in an INFO log
-            app.logger.info(f"Shippo page {page}: {len(data.get('results', []))} order(s)")
-            all_orders.extend(data.get('results', []))
-            if not data.get('next'):
-                break
-            page += 1
-    except IntegrationError as e:
-        return jsonify({'error': str(e)}), 502
+    while True:
+        response = integration_request(
+            'GET', 'https://api.goshippo.com/orders', 'Shippo',
+            params={
+                'results': 25,  # Shippo's page size
+                'page': page,
+                'start_date': f'{start_date.isoformat()}T00:00:00',
+                'end_date': f'{end_date.isoformat()}T23:59:59',
+                'order_status[]': 'SHIPPED',
+            },
+            headers=headers)
+        data = response.json()
+        # Bodies are not logged: Shippo order payloads carry customer names,
+        # addresses and phone numbers, which do not belong in an INFO log
+        app.logger.info(f"Shippo page {page}: {len(data.get('results', []))} order(s)")
+        all_orders.extend(data.get('results', []))
+        if not data.get('next'):
+            break
+        page += 1
+    return all_orders
 
-    if not all_orders:
-        return jsonify({
-            'message': 'No shipped Shippo orders in that date range. Shippo creates '
-                       'orders when you buy a label or connect a storefront.',
-            'errors': []
-        }), 200
-
-    try:
-        result = import_processed_orders(
-            process_shippo_data(all_orders), 'shippo')
-    except IntegrationError as e:
-        return jsonify({'error': str(e)}), 500
-
-    return import_response('Shippo', result)
+@app.route('/shippo/fetch_orders', methods=['POST'])
+@login_required
+@retry_on_db_lock()
+def fetch_shippo_orders():
+    return run_integration_import('shippo')
 
 @app.route('/woocommerce/fetch_orders', methods=['POST'])
 @login_required
@@ -2594,6 +2949,834 @@ def shopify_webhook():
     return jsonify({'status': 'ok', 'created': result.created, 'updated': result.updated,
                     'adopted': result.adopted, 'pending': result.pending}), 200
 
+# ---------------------------------------------------------------------------
+# OAuth 2.0 marketplaces (Etsy, eBay)
+#
+# Unlike Shippo/ShipStation/WooCommerce (a key in a header) or Shopify on its own
+# store (a key exchanged for a token with no human involved), Etsy and eBay
+# require the *seller* to approve the app in a browser. That means a consent
+# round trip, and the machinery below is shared by both:
+#
+#   1. "Connect" builds an authorize URL carrying a one-shot state nonce.
+#   2. The seller approves and is redirected back with ?code=...
+#   3. The code is exchanged for an access token + a long-lived refresh token.
+#   4. Later fetches silently renew the access token from the refresh token.
+#
+# Step 2 needs the browser to reach this machine. On a LAN-only box that is not
+# always true, so every connector also accepts the code pasted by hand — the
+# redirect lands on a page showing the code, and Management takes it. Same
+# exchange either way.
+# ---------------------------------------------------------------------------
+
+class OAuthSpec:
+    """The per-platform parts of the flow above.
+
+    authorize_url / token_url may be callables taking the credentials row, since
+    eBay's hosts differ between sandbox and production.
+    """
+
+    def __init__(self, authorize_url, token_url, scopes, redirect_endpoint,
+                 uses_pkce=False, redirect_value=None, auth_style='basic',
+                 extra_authorize_params=None, docs_url=''):
+        self.authorize_url = authorize_url
+        self.token_url = token_url
+        self.scopes = scopes
+        self.redirect_endpoint = redirect_endpoint
+        self.uses_pkce = uses_pkce
+        # eBay sends its RuName alias where Etsy sends the real redirect URI
+        self.redirect_value = redirect_value
+        self.auth_style = auth_style  # 'basic' (eBay) or 'body' (Etsy)
+        self.extra_authorize_params = extra_authorize_params or {}
+        self.docs_url = docs_url
+
+    def resolve(self, attr, credentials):
+        value = getattr(self, attr)
+        return value(credentials) if callable(value) else value
+
+# Renew a little early so a token cannot expire mid-import
+OAUTH_TOKEN_SAFETY_MARGIN = timedelta(minutes=5)
+
+def clear_oauth_tokens(credentials):
+    """Forget every token. Used when the app credentials themselves change."""
+    credentials.access_token = ''
+    credentials.refresh_token = ''
+    credentials.access_token_expires_at = None
+    credentials.refresh_token_expires_at = None
+
+def oauth_redirect_uri(spec):
+    """The absolute callback URL, which must match what is registered upstream."""
+    return url_for(spec.oauth.redirect_endpoint, _external=True)
+
+def oauth_begin(spec, credentials):
+    """Build the consent URL and stash the state/verifier for the callback."""
+    oauth = spec.oauth
+    client_id = spec.setting(credentials, 'client_id')
+    if not client_id:
+        raise IntegrationError(f'Enter the {spec.label} client ID and secret before connecting.')
+
+    state = secrets.token_urlsafe(24)
+    credentials.oauth_state = state
+    params = {
+        'response_type': 'code',
+        'client_id': client_id,
+        'redirect_uri': oauth.redirect_value(credentials) if callable(oauth.redirect_value)
+                        else (oauth.redirect_value or oauth_redirect_uri(spec)),
+        'scope': ' '.join(oauth.scopes),
+        'state': state,
+        **oauth.extra_authorize_params,
+    }
+
+    if oauth.uses_pkce:
+        # Etsy requires S256; the verifier never leaves this machine
+        verifier = secrets.token_urlsafe(64)[:128]
+        credentials.oauth_verifier = verifier
+        digest = hashlib.sha256(verifier.encode('ascii')).digest()
+        params['code_challenge'] = base64.urlsafe_b64encode(digest).decode().rstrip('=')
+        params['code_challenge_method'] = 'S256'
+    else:
+        credentials.oauth_verifier = ''
+
+    db.session.commit()
+    return f"{oauth.resolve('authorize_url', credentials)}?{urlencode(params)}"
+
+def oauth_token_request(spec, credentials, payload):
+    """POST to the token endpoint and persist whatever came back."""
+    oauth = spec.oauth
+    client_id = spec.setting(credentials, 'client_id')
+    client_secret = spec.setting(credentials, 'client_secret')
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+
+    if oauth.auth_style == 'basic':
+        pair = base64.b64encode(f'{client_id}:{client_secret}'.encode()).decode()
+        headers['Authorization'] = f'Basic {pair}'
+    else:
+        payload = {**payload, 'client_id': client_id}
+        if client_secret:
+            payload['client_secret'] = client_secret
+
+    response = integration_request(
+        'POST', oauth.resolve('token_url', credentials), spec.label,
+        data=payload, headers=headers)
+
+    try:
+        body = response.json()
+    except ValueError:
+        raise IntegrationError(f'{spec.label} returned an unreadable token response.')
+
+    token = body.get('access_token')
+    if not token:
+        raise IntegrationError(
+            f"{spec.label} did not return an access token: {body.get('error_description') or body}")
+
+    credentials.access_token = token
+    credentials.access_token_expires_at = (
+        datetime.now() + timedelta(seconds=int(body.get('expires_in') or 3600)))
+    if body.get('refresh_token'):
+        credentials.refresh_token = body['refresh_token']
+        # eBay reports the refresh token's own lifetime; Etsy's does not expire
+        if body.get('refresh_token_expires_in'):
+            credentials.refresh_token_expires_at = (
+                datetime.now() + timedelta(seconds=int(body['refresh_token_expires_in'])))
+
+    db.session.commit()
+    app.logger.info(f"{spec.label}: stored an access token valid for "
+                    f"{body.get('expires_in')}s")
+    return token
+
+def oauth_complete(spec, credentials, code, state=None):
+    """Exchange an authorization code. `state` is checked when the callback supplies it."""
+    if state is not None:
+        expected = (credentials.oauth_state or '').strip()
+        if not expected or not hmac.compare_digest(expected, state):
+            raise IntegrationError(
+                f'{spec.label} sent back an unexpected state value. Start the '
+                f'connection again from Management.')
+
+    oauth = spec.oauth
+    payload = {
+        'grant_type': 'authorization_code',
+        'code': code.strip(),
+        'redirect_uri': oauth.redirect_value(credentials) if callable(oauth.redirect_value)
+                        else (oauth.redirect_value or oauth_redirect_uri(spec)),
+    }
+    if oauth.uses_pkce:
+        payload['code_verifier'] = credentials.oauth_verifier or ''
+
+    token = oauth_token_request(spec, credentials, payload)
+    # The nonce and verifier are single-use
+    credentials.oauth_state = ''
+    credentials.oauth_verifier = ''
+    db.session.commit()
+    return token
+
+def oauth_access_token(spec, credentials):
+    """A usable access token, renewed from the refresh token when it is stale."""
+    cached = (credentials.access_token or '').strip()
+    expires_at = credentials.access_token_expires_at
+    if cached and expires_at and datetime.now() + OAUTH_TOKEN_SAFETY_MARGIN < expires_at:
+        return cached
+
+    refresh = (credentials.refresh_token or '').strip()
+    if not refresh:
+        raise IntegrationError(
+            f'{spec.label} is not connected yet. Open Management and click '
+            f'Connect {spec.label}.')
+
+    if (credentials.refresh_token_expires_at
+            and datetime.now() >= credentials.refresh_token_expires_at):
+        raise IntegrationError(
+            f'The {spec.label} connection has expired. Open Management and '
+            f'reconnect.')
+
+    payload = {'grant_type': 'refresh_token', 'refresh_token': refresh}
+    if spec.oauth.auth_style == 'basic':
+        # eBay requires the scopes to be restated when refreshing
+        payload['scope'] = ' '.join(spec.oauth.scopes)
+    return oauth_token_request(spec, credentials, payload)
+
+def oauth_status(spec):
+    """What Management shows about the connection, without exposing any token."""
+    credentials = spec.credentials()
+    if credentials is None:
+        return {'connected': False, 'expires_at': None, 'redirect_uri': ''}
+    return {
+        'connected': bool((credentials.refresh_token or '').strip()),
+        'expires_at': credentials.access_token_expires_at,
+        'redirect_uri': oauth_redirect_uri(spec),
+    }
+
+@app.route('/integrations/<key>/connect', methods=['POST'])
+@login_required
+def integration_connect(key):
+    """Start the consent round trip for an OAuth marketplace."""
+    spec = INTEGRATIONS.get(key)
+    if spec is None or spec.oauth is None:
+        abort(404)
+
+    # The button lives inside the Management form, so save what was typed before
+    # sending the operator off to the marketplace — otherwise a client ID pasted
+    # a moment ago would not be there when they came back.
+    if request.form:
+        try:
+            _save_integration_credentials(request.form)
+            db.session.commit()
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            app.logger.error(f"Could not save credentials before connecting {key}: {e}")
+            flash('Could not save those credentials.', 'error')
+            return redirect(url_for('management'))
+
+    credentials = spec.credentials()
+    if credentials is None:
+        credentials = spec.model()
+        db.session.add(credentials)
+        db.session.commit()
+    try:
+        return redirect(oauth_begin(spec, credentials))
+    except IntegrationError as e:
+        db.session.rollback()
+        flash(str(e), 'error')
+        return redirect(url_for('management'))
+
+@app.route('/integrations/<key>/callback')
+@login_required
+def integration_callback(key):
+    """Where the marketplace sends the seller back with ?code=…
+
+    Login is required, so a stray hit from anyone who is not already signed in
+    goes to the login page rather than into the token exchange.
+    """
+    spec = INTEGRATIONS.get(key)
+    if spec is None or spec.oauth is None:
+        abort(404)
+
+    error = request.args.get('error_description') or request.args.get('error')
+    if error:
+        flash(f'{spec.label} declined the connection: {error}', 'error')
+        return redirect(url_for('management'))
+
+    code = request.args.get('code')
+    if not code:
+        flash(f'{spec.label} sent no authorization code.', 'error')
+        return redirect(url_for('management'))
+
+    credentials = spec.credentials()
+    if credentials is None:
+        flash(f'Save the {spec.label} credentials first.', 'error')
+        return redirect(url_for('management'))
+
+    try:
+        oauth_complete(spec, credentials, code, state=request.args.get('state'))
+    except IntegrationError as e:
+        db.session.rollback()
+        flash(str(e), 'error')
+        return redirect(url_for('management'))
+
+    flash(f'{spec.label} connected.', 'success')
+    return redirect(url_for('management'))
+
+@app.route('/integrations/<key>/paste_code', methods=['POST'])
+@login_required
+def integration_paste_code(key):
+    """Fallback for when the redirect cannot reach this machine.
+
+    The seller approves in any browser, copies the `code` out of the address bar
+    and pastes it here. The state check is skipped — there is no round trip to
+    tie it to — so the code itself is the only credential, exactly as in the
+    redirect case.
+    """
+    spec = INTEGRATIONS.get(key)
+    if spec is None or spec.oauth is None:
+        abort(404)
+    credentials = spec.credentials()
+    if credentials is None:
+        flash(f'Save the {spec.label} credentials first.', 'error')
+        return redirect(url_for('management'))
+
+    code = (request.form.get('code') or '').strip()
+    if not code:
+        flash('Paste the authorization code first.', 'error')
+        return redirect(url_for('management'))
+    # Tolerate a whole pasted URL
+    if 'code=' in code:
+        code = parse_qs(urlparse(code).query).get('code', [code])[0]
+
+    try:
+        oauth_complete(spec, credentials, code)
+    except IntegrationError as e:
+        db.session.rollback()
+        flash(str(e), 'error')
+        return redirect(url_for('management'))
+
+    flash(f'{spec.label} connected.', 'success')
+    return redirect(url_for('management'))
+
+@app.route('/integrations/<key>/disconnect', methods=['POST'])
+@login_required
+def integration_disconnect(key):
+    spec = INTEGRATIONS.get(key)
+    if spec is None or spec.oauth is None:
+        abort(404)
+    credentials = spec.credentials()
+    if credentials is not None:
+        clear_oauth_tokens(credentials)
+        db.session.commit()
+    flash(f'{spec.label} disconnected.', 'info')
+    return redirect(url_for('management'))
+
+# ---------------------------------------------------------------------------
+# Etsy — Open API v3
+#
+# Receipts, not "orders": one receipt is one buyer checkout and carries the
+# transactions (line items) plus the shipping address. Money arrives as
+# {amount, divisor} integers, never floats.
+# ---------------------------------------------------------------------------
+
+ETSY_SCOPES = ('transactions_r', 'listings_r', 'shops_r')
+
+def etsy_money(value):
+    """Etsy sends {'amount': 1250, 'divisor': 100} rather than 12.50."""
+    if not isinstance(value, dict):
+        return Decimal('0')
+    divisor = Decimal(str(value.get('divisor') or 100))
+    if divisor == 0:
+        return Decimal('0')
+    return (Decimal(str(value.get('amount') or 0)) / divisor).quantize(Decimal('0.01'))
+
+def etsy_api_key(spec, credentials):
+    """Etsy's x-api-key is *both* credentials joined: 'keystring:shared_secret'.
+
+    Not the keystring alone, which is what the OAuth client_id is. Sending only
+    the keystring is refused with "Shared secret is required in x-api-key
+    header"; sending an empty header makes Etsy spell the format out.
+    """
+    keystring = spec.setting(credentials, 'client_id')
+    shared_secret = spec.setting(credentials, 'client_secret')
+    if not keystring or not shared_secret:
+        raise IntegrationError(
+            'Etsy needs both the keystring and the shared secret — it sends them '
+            'together in one header. Add the missing one on the Management page.')
+    return f'{keystring}:{shared_secret}'
+
+def etsy_headers(spec, credentials):
+    return {
+        'x-api-key': etsy_api_key(spec, credentials),
+        'Authorization': f'Bearer {oauth_access_token(spec, credentials)}',
+    }
+
+def etsy_shop_id(spec, credentials):
+    """The numeric shop id, discovered from the token's own user if not stored."""
+    stored = spec.setting(credentials, 'shop_id')
+    if stored:
+        return stored
+
+    response = integration_request(
+        'GET', 'https://openapi.etsy.com/v3/application/users/me', spec.label,
+        headers=etsy_headers(spec, credentials))
+    shop_id = str((response.json() or {}).get('shop_id') or '')
+    if not shop_id:
+        raise IntegrationError(
+            'Could not determine the Etsy shop id for this account. Enter it on '
+            'the Management page.')
+
+    credentials.shop_id = shop_id
+    db.session.commit()
+    app.logger.info(f'Etsy shop id discovered: {shop_id}')
+    return shop_id
+
+def etsy_fetch_receipts(credentials, start_date, end_date, max_pages=100):
+    """Page the receipts endpoint over a date range. Etsy filters on epoch seconds."""
+    spec = INTEGRATIONS['etsy']
+    shop_id = etsy_shop_id(spec, credentials)
+    min_created = int(datetime.combine(start_date, dt_time.min).timestamp())
+    max_created = int(datetime.combine(end_date, dt_time.max).timestamp())
+
+    receipts = []
+    limit, offset = 100, 0
+    for page in range(max_pages):
+        response = integration_request(
+            'GET', f'https://openapi.etsy.com/v3/application/shops/{shop_id}/receipts',
+            spec.label,
+            params={'min_created': min_created, 'max_created': max_created,
+                    'limit': limit, 'offset': offset},
+            headers=etsy_headers(spec, credentials))
+        body = response.json() or {}
+        batch = body.get('results') or []
+        receipts.extend(batch)
+        app.logger.info(f'Etsy page {page + 1}: {len(batch)} receipt(s)')
+        if len(batch) < limit:
+            break
+        offset += limit
+    else:
+        app.logger.warning(f'Stopped paging Etsy receipts at {max_pages} pages')
+
+    return receipts
+
+def process_etsy_data(receipts):
+    """Translate Etsy receipts into the shape import_processed_orders wants."""
+    processed = []
+    for receipt in receipts:
+        try:
+            if receipt.get('status') == 'Canceled':
+                app.logger.info(f"Skipping cancelled Etsy receipt {receipt.get('receipt_id')}")
+                continue
+
+            name = (receipt.get('name') or '').strip()
+            customer_data = {
+                'name': name or 'Unknown',
+                'email': receipt.get('buyer_email') or '',
+                'company': '',
+                'street1': receipt.get('first_line') or '',
+                'street2': receipt.get('second_line') or '',
+                'street3': '',
+                'city': receipt.get('city') or '',
+                # Etsy sends the full state name for US addresses; get_state_info
+                # wants the USPS abbreviation, so normalise here
+                'state': us_state_code(receipt.get('state')),
+                'postal_code': receipt.get('zip') or '',
+                'country': receipt.get('country_iso') or '',
+                'phone': '',
+            }
+            customer_data_unavailable = not any([
+                customer_data['email'], name,
+                customer_data['street1'], customer_data['postal_code'],
+            ])
+
+            created = receipt.get('created_timestamp') or receipt.get('create_timestamp')
+            order_date = (datetime.fromtimestamp(int(created)) if created else datetime.now())
+
+            shipservice = tracking = shipdate = None
+            for shipment in receipt.get('shipments') or []:
+                tracking = shipment.get('tracking_code') or tracking
+                carrier = (shipment.get('carrier_name') or '').strip()
+                if carrier:
+                    shipservice = carrier.split()[0].upper()
+                shipped = shipment.get('shipment_notification_timestamp')
+                if shipped:
+                    shipdate = datetime.fromtimestamp(int(shipped)).date()
+
+            items = []
+            for line in receipt.get('transactions') or []:
+                quantity = int(line.get('quantity') or 0)
+                if quantity < 1:
+                    continue
+                items.append({
+                    'sku': line.get('sku') or line.get('title') or 'Unknown SKU',
+                    'name': line.get('title') or 'Unknown Item',
+                    'quantity': quantity,
+                    'unit_price': etsy_money(line.get('price')),
+                })
+
+            internal_notes = 'Imported from Etsy'
+            if customer_data_unavailable:
+                internal_notes += ' — Etsy withheld the buyer details for this receipt.'
+
+            processed.append({
+                'external_order_id': str(receipt['receipt_id']),
+                'external_order_number': str(receipt.get('receipt_id')),
+                'order_date': order_date,
+                'shipservice': shipservice,
+                'tracking': tracking,
+                'shipdate': shipdate,
+                'customer': customer_data,
+                'customer_data_unavailable': customer_data_unavailable,
+                'items': items,
+                'order_total': etsy_money(receipt.get('grandtotal')),
+                'tax_amount': etsy_money(receipt.get('total_tax_cost')),
+                'shipping_amount': etsy_money(receipt.get('total_shipping_cost')),
+                'customer_notes': receipt.get('message_from_buyer') or '',
+                'internal_notes': internal_notes,
+            })
+        except Exception as e:
+            app.logger.error(
+                f"Skipping malformed Etsy receipt {receipt.get('receipt_id', 'Unknown')}: {e}")
+            continue
+
+    return processed
+
+# ---------------------------------------------------------------------------
+# eBay — Sell Fulfillment API
+#
+# Reading orders needs a *user* token, not the application token that client
+# credentials would give you, which is why eBay goes through the same consent
+# flow as Etsy. eBay also anonymises buyer contact details on most orders, so
+# expect these to land in the pending queue rather than becoming sales outright.
+# ---------------------------------------------------------------------------
+
+EBAY_SCOPES = ('https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly',)
+
+def ebay_host(credentials, subdomain):
+    suffix = 'sandbox.ebay.com' if getattr(credentials, 'sandbox', False) else 'ebay.com'
+    return f'https://{subdomain}.{suffix}'
+
+def ebay_money(value):
+    """eBay amounts arrive as {'value': '12.50', 'currency': 'USD'}."""
+    if not isinstance(value, dict):
+        return Decimal('0')
+    try:
+        return Decimal(str(value.get('value') or '0'))
+    except InvalidOperation:
+        return Decimal('0')
+
+def ebay_fetch_orders(credentials, start_date, end_date, max_pages=100):
+    spec = INTEGRATIONS['ebay']
+    token = oauth_access_token(spec, credentials)
+    # eBay's creationdate filter wants UTC instants in this exact bracket form
+    start = datetime.combine(start_date, dt_time.min).astimezone().astimezone(
+        timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    end = datetime.combine(end_date, dt_time.max).astimezone().astimezone(
+        timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+
+    url = f"{ebay_host(credentials, 'api')}/sell/fulfillment/v1/order"
+    params = {'filter': f'creationdate:[{start}..{end}]', 'limit': 200, 'offset': 0}
+    orders = []
+    for page in range(max_pages):
+        response = integration_request(
+            'GET', url, spec.label, params=params,
+            headers={'Authorization': f'Bearer {token}',
+                     'Accept': 'application/json'})
+        body = response.json() or {}
+        batch = body.get('orders') or []
+        orders.extend(batch)
+        app.logger.info(f'eBay page {page + 1}: {len(batch)} order(s)')
+        if len(batch) < params['limit']:
+            break
+        params = {**params, 'offset': params['offset'] + params['limit']}
+    else:
+        app.logger.warning(f'Stopped paging eBay orders at {max_pages} pages')
+
+    return orders
+
+def parse_ebay_datetime(value):
+    """eBay timestamps are UTC ISO 8601 with a Z; store naive local like everything else."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except ValueError:
+        app.logger.warning(f'Unparseable eBay timestamp: {value!r}')
+        return None
+    return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+
+def process_ebay_data(ebay_orders):
+    """Translate eBay orders into the shape import_processed_orders wants."""
+    processed = []
+    for order in ebay_orders:
+        try:
+            if (order.get('orderPaymentStatus') or '') == 'FAILED':
+                app.logger.info(f"Skipping unpaid eBay order {order.get('orderId')}")
+                continue
+
+            ship_to = {}
+            for instruction in order.get('fulfillmentStartInstructions') or []:
+                ship_to = ((instruction.get('shippingStep') or {}).get('shipTo')) or {}
+                if ship_to:
+                    break
+            address = ship_to.get('contactAddress') or {}
+            name = (ship_to.get('fullName') or '').strip()
+
+            customer_data = {
+                'name': name or 'Unknown',
+                'email': ship_to.get('email') or '',
+                'company': '',
+                'street1': address.get('addressLine1') or '',
+                'street2': address.get('addressLine2') or '',
+                'street3': '',
+                'city': address.get('city') or '',
+                'state': us_state_code(address.get('stateOrProvince')),
+                'postal_code': address.get('postalCode') or '',
+                'country': address.get('countryCode') or '',
+                'phone': (ship_to.get('primaryPhone') or {}).get('phoneNumber') or '',
+            }
+            # eBay anonymises buyer contact details on most orders
+            customer_data_unavailable = not any([
+                customer_data['email'], name,
+                customer_data['street1'], customer_data['postal_code'],
+            ])
+
+            pricing = order.get('pricingSummary') or {}
+            order_date = parse_ebay_datetime(order.get('creationDate')) or datetime.now()
+
+            # Tracking is only present when the order payload embeds
+            # shippingFulfillments; eBay otherwise exposes it behind a per-order
+            # call, which a later pass can add if it turns out to matter.
+            shipservice = tracking = shipdate = None
+            for fulfillment in order.get('shippingFulfillments') or []:
+                tracking = fulfillment.get('shipmentTrackingNumber') or tracking
+                carrier = (fulfillment.get('shippingCarrierCode') or '').strip()
+                if carrier:
+                    shipservice = carrier.split()[0].upper()
+                shipped = parse_ebay_datetime(fulfillment.get('shippedDate'))
+                if shipped:
+                    shipdate = shipped.date()
+
+            items = []
+            for line in order.get('lineItems') or []:
+                quantity = int(line.get('quantity') or 0)
+                if quantity < 1:
+                    continue
+                unit = ebay_money(line.get('lineItemCost'))
+                items.append({
+                    'sku': line.get('sku') or line.get('legacyItemId') or line.get('title') or 'Unknown SKU',
+                    'name': line.get('title') or 'Unknown Item',
+                    'quantity': quantity,
+                    'unit_price': unit,
+                })
+
+            internal_notes = 'Imported from eBay'
+            if customer_data_unavailable:
+                internal_notes += (' — eBay withheld the buyer details for this order. '
+                                   'Enter the customer by hand.')
+
+            processed.append({
+                'external_order_id': str(order['orderId']),
+                'external_order_number': str(order.get('legacyOrderId') or order['orderId']),
+                'order_date': order_date,
+                'shipservice': shipservice,
+                'tracking': tracking,
+                'shipdate': shipdate,
+                'customer': customer_data,
+                'customer_data_unavailable': customer_data_unavailable,
+                'items': items,
+                'order_total': ebay_money(pricing.get('total')),
+                'tax_amount': ebay_money(pricing.get('tax')),
+                'shipping_amount': ebay_money(pricing.get('deliveryCost')),
+                'customer_notes': order.get('buyerCheckoutNotes') or '',
+                'internal_notes': internal_notes,
+            })
+        except Exception as e:
+            app.logger.error(
+                f"Skipping malformed eBay order {order.get('orderId', 'Unknown')}: {e}")
+            continue
+
+    return processed
+
+# ---------------------------------------------------------------------------
+# The registry
+#
+# Everything above is platform-specific; everything below is generic. Adding a
+# marketplace means adding one entry here plus its fetch/process pair — the
+# Management form, the environment overrides, the dashboard card, the fetch
+# route and (if it needs one) the OAuth round trip all follow from this.
+# ---------------------------------------------------------------------------
+
+def _register(spec):
+    INTEGRATIONS[spec.key] = spec
+    return spec
+
+def build_integration_registry():
+    """Populate INTEGRATIONS.
+
+    Deferred to a function and called at the bottom of this module because the
+    entries below name each platform's fetch/process pair, and some of those are
+    defined further down the file.
+    """
+    _register(IntegrationSpec(
+        key='shopify', label='Shopify', model=ShopifyCredentials,
+        secret_fields=('api_key', 'api_secret', 'client_id', 'client_secret'),
+        plain_fields=('shop_domain',),
+        bool_fields=('webhooks_enabled',),
+        env_fields=SHOPIFY_ENV_FIELDS,
+        fetch=lambda credentials, start, end: shopify_fetch_order_pages(
+            credentials, start.isoformat(), end.isoformat()),
+        process=process_shopify_data,
+        blurb='Orders from a Shopify store.'))
+
+    _register(IntegrationSpec(
+        key='shipstation', label='ShipStation', model=ShipStationCredentials,
+        form_prefix='ss', secret_fields=('api_key', 'api_secret'),
+        fetch=shipstation_fetch_orders, process=process_shipstation_data,
+        enrich=shipstation_enrich,
+        blurb='Orders and shipments from ShipStation.'))
+
+    _register(IntegrationSpec(
+        key='shippo', label='Shippo', model=ShippoCredentials,
+        secret_fields=('api_key',),
+        fetch=shippo_fetch_orders, process=process_shippo_data,
+        empty_message='No shipped Shippo orders in that date range. Shippo creates '
+                      'orders when you buy a label or connect a storefront.',
+        blurb='Shipped orders from Shippo.'))
+
+    _register(IntegrationSpec(
+        key='woocommerce', label='WooCommerce', model=WooCommerceCredentials,
+        form_prefix='wc', secret_fields=('api_key', 'api_secret'),
+        blurb='Orders from a WooCommerce store. Not implemented yet.'))
+
+    _register(IntegrationSpec(
+        key='etsy', label='Etsy', model=EtsyCredentials,
+        secret_fields=('client_id', 'client_secret'), plain_fields=('shop_id',),
+        # Etsy's own words. client_id/client_secret are only how they are stored.
+        field_labels={'client_id': 'Keystring', 'client_secret': 'Shared Secret',
+                      'shop_id': 'Shop ID'},
+        field_hints={
+            'client_id': 'Your app\'s keystring, from the Etsy developer console. '
+                         'Also sent as the OAuth client ID.',
+            'client_secret': 'Your app\'s shared secret. Etsy needs it for every '
+                             'API call, not just for sign-in — the two are sent '
+                             'together as "keystring:shared_secret".',
+        },
+        env_fields={
+            'client_id': ('ETSY_KEYSTRING', 'ETSY_CLIENT_ID'),
+            'client_secret': ('ETSY_SHAREDSECRET', 'ETSY_CLIENT_SECRET'),
+            'shop_id': ('ETSY_SHOP_ID',),
+        },
+        fetch=etsy_fetch_receipts, process=process_etsy_data,
+        oauth=OAuthSpec(
+            authorize_url='https://www.etsy.com/oauth/connect',
+            token_url='https://api.etsy.com/v3/public/oauth/token',
+            scopes=ETSY_SCOPES,
+            redirect_endpoint='integration_callback_etsy',
+            uses_pkce=True, auth_style='body',
+            docs_url='https://developers.etsy.com/documentation/essentials/authentication'),
+        blurb='Receipts from an Etsy shop.'))
+
+    _register(IntegrationSpec(
+        key='ebay', label='eBay', model=EbayCredentials,
+        secret_fields=('client_id', 'client_secret'), plain_fields=('ru_name',),
+        bool_fields=('sandbox',),
+        # eBay's developer console calls these the App ID and Cert ID
+        field_labels={'client_id': 'App ID (Client ID)',
+                      'client_secret': 'Cert ID (Client Secret)',
+                      'ru_name': 'RuName (redirect alias)',
+                      'sandbox': 'Use the eBay sandbox'},
+        env_fields={
+            'client_id': ('EBAY_APP_ID', 'EBAY_CLIENT_ID'),
+            'client_secret': ('EBAY_CERT_ID', 'EBAY_CLIENT_SECRET'),
+            'ru_name': ('EBAY_RU_NAME',),
+        },
+        fetch=ebay_fetch_orders, process=process_ebay_data,
+        oauth=OAuthSpec(
+            authorize_url=lambda c: f"{ebay_host(c, 'auth')}/oauth2/authorize",
+            token_url=lambda c: f"{ebay_host(c, 'api')}/identity/v1/oauth2/token",
+            scopes=EBAY_SCOPES,
+            redirect_endpoint='integration_callback_ebay',
+            # eBay sends the RuName alias, not the URL, in both calls
+            redirect_value=lambda c: (c.ru_name or '').strip(),
+            auth_style='basic',
+            docs_url='https://developer.ebay.com/api-docs/static/oauth-authorization-code-grant.html'),
+        blurb='Orders from an eBay seller account.'))
+
+# Named callback endpoints, so each platform can be given a stable redirect URI
+# to register upstream rather than one with a path parameter in it.
+@app.route('/etsy/callback')
+@login_required
+def integration_callback_etsy():
+    return integration_callback('etsy')
+
+@app.route('/ebay/callback')
+@login_required
+def integration_callback_ebay():
+    return integration_callback('ebay')
+
+def requested_date_range():
+    """Pull and validate start_date/end_date off an import form."""
+    start_date = request.form.get('start_date')
+    end_date = request.form.get('end_date')
+    if not start_date or not end_date:
+        return None, None, (jsonify({'error': 'Start date and end date are required'}), 400)
+    try:
+        start = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end = datetime.strptime(end_date, '%Y-%m-%d').date()
+    except ValueError:
+        return None, None, (jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400)
+    if end < start:
+        return None, None, (jsonify({'error': 'The end date is before the start date.'}), 400)
+    return start, end, None
+
+def run_integration_import(key):
+    """Fetch a date range from one platform and import it. Shared by every route."""
+    spec = INTEGRATIONS.get(key)
+    if spec is None or spec.fetch is None:
+        return jsonify({'error': f'No importer is implemented for {key}.'}), 501
+
+    credentials, error = require_integration(spec.model, spec.label)
+    if error:
+        return error
+
+    start, end, error = requested_date_range()
+    if error:
+        return error
+
+    try:
+        raw_orders = spec.fetch(credentials, start, end)
+    except IntegrationError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 502
+
+    if not raw_orders:
+        return jsonify({'message': spec.empty_message
+                                   or f'No {spec.label} orders in that date range.',
+                        'errors': []}), 200
+
+    try:
+        result = import_processed_orders(
+            spec.process(raw_orders), spec.key,
+            enrich=spec.enrich(credentials) if spec.enrich else None)
+    except IntegrationError as e:
+        return jsonify({'error': str(e)}), 500
+
+    return import_response(spec.label, result)
+
+@app.route('/integrations/<key>/fetch_orders', methods=['POST'])
+@login_required
+@retry_on_db_lock()
+def fetch_integration_orders(key):
+    if key not in INTEGRATIONS:
+        abort(404)
+    return run_integration_import(key)
+
+@app.route('/etsy/fetch_orders', methods=['POST'])
+@login_required
+@retry_on_db_lock()
+def fetch_etsy_orders():
+    return run_integration_import('etsy')
+
+@app.route('/ebay/fetch_orders', methods=['POST'])
+@login_required
+@retry_on_db_lock()
+def fetch_ebay_orders():
+    return run_integration_import('ebay')
+
 @app.route('/finance')
 @login_required
 def finance():
@@ -2878,6 +4061,21 @@ def _build_us_state_maps():
 
 # All 50 states plus DC, territories (PR, GU, VI, AS, MP, UM), and military mail codes
 US_STATE_ABBR_TO_NAME, US_STATE_NAME_TO_ABBR = _build_us_state_maps()
+
+def us_state_code(value):
+    """Normalise a US state to its USPS abbreviation, or pass the value through.
+
+    Etsy sends full state names ("Washington") and eBay sends either, but
+    get_state_info() — and so the WA B&O report — only recognises the
+    abbreviation. An unrecognised value is returned unchanged rather than
+    blanked, so a non-US province still reaches the address line intact.
+    """
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    if len(text) == 2 and text.upper() in US_STATE_ABBR_TO_NAME:
+        return text.upper()
+    return US_STATE_NAME_TO_ABBR.get(text.replace('.', '').upper(), text)
 
 # Common spellings that pycountry.countries.lookup() cannot resolve, mapped to alpha-2 codes
 COUNTRY_ALIASES = {
@@ -3331,6 +4529,11 @@ def is_duplicate_transaction(new_transaction):
         BankTransaction.transaction_type == new_transaction.transaction_type,
         BankTransaction.check_number == new_transaction.check_number
     ).first() is not None
+
+# Every platform's fetch/process function now exists, so the registry can be
+# built. Import-time, not request-time: the Management page, the dashboard and
+# the fetch routes all read it.
+build_integration_registry()
 
 if __name__ == '__main__':
     with app.app_context():

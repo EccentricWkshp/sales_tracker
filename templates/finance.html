@@ -1,23 +1,33 @@
+<!-- templates/finance.html -->
 {% extends "base.html" %}
-{% block title %}Banking{% endblock %}
-{% block content %}
 
-<div class="container">
-    <h1>Financial Management</h1>
-    
-    <ul class="nav nav-tabs mb-4">
-        <li class="nav-item">
-            <a class="nav-link" href="{{ url_for('state_taxes') }}">Taxes</a>
-        </li>
-        <li class="nav-item">
-            <a class="nav-link active" href="{{ url_for('banking') }}">Banking</a>
-        </li>
-    </ul>
+{% block title %}Finance{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1>Finance</h1>
+        <p class="page-subtitle">Tax reporting and bank reconciliation.</p>
+    </div>
 </div>
 
-
-
-{% endblock %}
-
-{% block extra_scripts %}
+<div class="summary-cards">
+    <div class="card">
+        <h2>State Taxes</h2>
+        <p class="card-note">
+            Quarterly Washington B&amp;O and sales-tax figures, broken down by
+            destination state and city.
+        </p>
+        <p><a class="btn btn-primary" href="{{ url_for('state_taxes') }}">
+            <i class="fas fa-file-invoice-dollar"></i> Open State Taxes</a></p>
+    </div>
+    <div class="card">
+        <h2>Banking</h2>
+        <p class="card-note">
+            Import bank transactions and reconcile them against sales receipts.
+        </p>
+        <p><a class="btn btn-primary" href="{{ url_for('banking') }}">
+            <i class="fas fa-university"></i> Open Banking</a></p>
+    </div>
+</div>
 {% endblock %}

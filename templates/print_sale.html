@@ -61,6 +61,26 @@
             width: 175px;;
             margin-left: auto;
         }
+        /* Datasheet bar — on screen only, never part of the printed receipt */
+        .datasheets {
+            border: 1px solid #b9d4ee;
+            background: #eff6fd;
+            border-radius: 4px;
+            padding: 10px 14px;
+            margin-bottom: 16px;
+        }
+        .datasheets h3 { margin: 0 0 4px 0; font-size: 13px; }
+        .datasheets p { margin: 0 0 8px 0; color: #445; }
+        .datasheets ul { margin: 0 0 8px 0; padding-left: 18px; }
+        .datasheets li { margin-bottom: 2px; }
+        .datasheets button {
+            font: inherit;
+            padding: 4px 10px;
+            border: 1px solid #7aa7d2;
+            border-radius: 4px;
+            background: #fff;
+            cursor: pointer;
+        }
 		@media print {
             body {
                 print-color-adjust: exact;
@@ -69,10 +89,33 @@
             .internal-notes {
                 display: none;
             }
+            .no-print {
+                display: none !important;
+            }
         }
     </style>
 </head>
 <body>
+    {% if datasheets %}
+    {# Placed first so it is the first thing on screen once the print dialog is
+       dismissed. Printing a PDF cannot be folded into this page's print job, so
+       each datasheet opens in its own tab to be printed from there. #}
+    <div class="datasheets no-print">
+        <h3>{{ datasheets | length }} datasheet{{ '' if datasheets | length == 1 else 's' }} ship with this order</h3>
+        <p>The receipt prints on its own. Open these and print each one to include with the shipment.</p>
+        <ul>
+            {% for sheet in datasheets %}
+            <li>
+                <a href="{{ url_for('download_product_attachment', id=sheet.attachment.id) }}"
+                   target="_blank" rel="noopener" class="datasheet-link">
+                    {{ sheet.product.sku }} — {{ sheet.attachment.original_name }}
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+        <button type="button" id="openDatasheets">Open all in new tabs</button>
+    </div>
+    {% endif %}
     <div class="invoice-header">
         <div>
             {% if company_info and company_info.logo %}
@@ -178,6 +221,17 @@
 	<script>
         window.onload = function() {
             window.print();
+        };
+
+        var openAll = document.getElementById('openDatasheets');
+        if (openAll) {
+            openAll.addEventListener('click', function() {
+                // Popup blockers stop a burst of window.open calls that are not
+                // directly inside a click handler, so they all go here.
+                document.querySelectorAll('.datasheet-link').forEach(function(link) {
+                    window.open(link.href, '_blank', 'noopener');
+                });
+            });
         }
     </script>
 	

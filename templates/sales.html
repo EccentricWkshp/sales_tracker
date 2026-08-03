@@ -375,23 +375,6 @@ $(document).ready(function() {
         modal.show();
     });
 
-    $(".edit-sale").click(function() {
-        var saleId = $(this).data("id");
-        $("#modalTitle").text("Edit Sale");
-        $.get("/sales/get/" + saleId, function(data) {
-            $("#saleId").val(data.id);
-            $("#customer").val(data.customer_id);
-            currencyInputs.shipping.setRawValue(data.shipping);
-            $("#lineItems").empty();
-            lineItemCount = 0;
-            data.line_items.forEach(function(item) {
-                addLineItem(item);
-            });
-            updateTotals();
-            modal.show();
-        });
-    });
-
     closeBtn.click(function() {
         $('#customer').prop('disabled', false);
         modal.hide();

@@ -208,17 +208,60 @@ $(document).ready(function() {
 
     $('#customer').change(function() {
         const customerId = $(this).val();
-        $.getJSON(`/api/customer/${customerId}`, function(data) {
-            $('#billing_address').val(data.billing_address);
-            $('#shipping_address').val(data.shipping_address);
-        });
+        if (!customerId) { return; }
+        // /customers/get/<id>, not /api/customer/<id> — the latter has never
+        // existed, so changing the customer used to leave both addresses stale
+        // with nothing on screen to say so.
+        $.getJSON(`/customers/get/${customerId}`)
+            .done(function(data) {
+                $('#billing_address').val(data.billing_address || '');
+                $('#shipping_address').val(data.shipping_address || '');
+            })
+            .fail(function(xhr) {
+                showFlashMessage(serverMessage(xhr, 'Could not load that customer\'s addresses.'),
+                                 'error');
+            });
     });
 
     $('#editSaleForm').submit(function(e) {
         e.preventDefault();
-        if (confirm('Are you sure you want to update this sale?')) {
-            this.submit();
-        }
+        if (!confirm('Are you sure you want to update this sale?')) { return; }
+
+        var lineItems = [];
+        $('#lineItems .line-item').each(function() {
+            lineItems.push({
+                product_id: $(this).find('.product-select').val(),
+                quantity: $(this).find('.quantity').val(),
+                price_each: $(this).find('.price-each').val()
+            });
+        });
+
+        var $submit = $(this).find('button[type="submit"]').prop('disabled', true);
+        // JSON, matching /sales/add. The subtotal and total inputs are display
+        // only — the server recomputes the total from these line items.
+        $.ajax({
+            url: $(this).attr('action'),
+            method: 'POST',
+            data: JSON.stringify({
+                customer_id: $('#customer').val(),
+                date: $('#date').val(),
+                shipservice: $('#shipservice').val(),
+                shipdate: $('#shipdate').val(),
+                tracking: $('#tracking').val(),
+                line_items: lineItems,
+                tax: $('#tax').val(),
+                shipping: $('#shipping').val(),
+                customer_notes: $('#customer_notes').val(),
+                internal_notes: $('#internal_notes').val(),
+                external_order_number: $('#external_order_number').val()
+            }),
+            contentType: 'application/json'
+        }).done(function(response) {
+            window.location.href = response.redirect;
+        }).fail(function(xhr) {
+            $submit.prop('disabled', false);
+            showFlashMessage(serverMessage(xhr, 'Could not update this sale.'), 'error');
+        });
     });
 
     updateLineTotals();

@@ -43,88 +43,30 @@
     </div>
     {% endif %}
 
-    {% if shippo_enabled or shipstation_enabled or woocommerce_enabled or shopify_enabled %}
+    {% if enabled_integrations %}
     <h2>Import Orders</h2>
     <div class="integrations-container">
-        {% if shopify_enabled %}
+        {% for view in enabled_integrations %}
         <div class="integration-section">
-            <h2><i class="fab fa-shopify"></i> Shopify</h2>
-            <form id="shopifyForm">
+            <h2>{% if view.icon %}<i class="{{ view.icon }}"></i> {% endif %}{{ view.label }}</h2>
+            <form class="integrationFetchForm" data-url="{{ view.fetch_url }}"
+                  data-result="#result-{{ view.key }}">
                 <div class="form-container">
                     <div class="form-group">
-                        <label for="shopify_start_date">Start Date</label>
-                        <input type="date" id="shopify_start_date" name="start_date" class="form-control" required>
+                        <label for="{{ view.key }}_start_date">Start Date</label>
+                        <input type="date" id="{{ view.key }}_start_date" name="start_date" class="form-control" required>
                     </div>
                     <div class="form-group">
-                        <label for="shopify_end_date">End Date</label>
-                        <input type="date" id="shopify_end_date" name="end_date" class="form-control" required>
+                        <label for="{{ view.key }}_end_date">End Date</label>
+                        <input type="date" id="{{ view.key }}_end_date" name="end_date" class="form-control" required>
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-download"></i> Fetch Shopify Orders</button>
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-download"></i> Fetch {{ view.label }} Orders</button>
             </form>
-            <div id="shopifyResult" class="integration-result"></div>
+            <div id="result-{{ view.key }}" class="integration-result"></div>
         </div>
-        {% endif %}
-
-        {% if shippo_enabled %}
-        <div class="integration-section">
-            <h2><i class="fas fa-shipping-fast"></i> Shippo</h2>
-            <form id="shippoForm">
-                <div class="form-container">
-                    <div class="form-group">
-                        <label for="shippo_start_date">Start Date</label>
-                        <input type="date" id="shippo_start_date" name="start_date" class="form-control" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="shippo_end_date">End Date</label>
-                        <input type="date" id="shippo_end_date" name="end_date" class="form-control" required>
-                    </div>
-                </div>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-download"></i> Fetch Shippo Orders</button>
-            </form>
-            <div id="shippoResult" class="integration-result"></div>
-        </div>
-        {% endif %}
-
-        {% if shipstation_enabled %}
-        <div class="integration-section">
-            <h2><i class="fas fa-box-open"></i> ShipStation</h2>
-            <form id="shipstationForm">
-                <div class="form-container">
-                    <div class="form-group">
-                        <label for="ss_start_date">Start Date</label>
-                        <input type="date" id="ss_start_date" name="start_date" class="form-control" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="ss_end_date">End Date</label>
-                        <input type="date" id="ss_end_date" name="end_date" class="form-control" required>
-                    </div>
-                </div>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-download"></i> Fetch ShipStation Orders</button>
-            </form>
-            <div id="shipstationResult" class="integration-result"></div>
-        </div>
-        {% endif %}
-
-        {% if woocommerce_enabled %}
-        <div class="integration-section">
-            <h2><i class="fab fa-wordpress"></i> WooCommerce</h2>
-            <form id="woocommerceForm">
-                <div class="form-container">
-                    <div class="form-group">
-                        <label for="wc_start_date">Start Date</label>
-                        <input type="date" id="wc_start_date" name="start_date" class="form-control" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="wc_end_date">End Date</label>
-                        <input type="date" id="wc_end_date" name="end_date" class="form-control" required>
-                    </div>
-                </div>
-                <button type="submit" class="btn btn-primary"><i class="fas fa-download"></i> Fetch WooCommerce Orders</button>
-            </form>
-            <div id="woocommerceResult" class="integration-result"></div>
-        </div>
-        {% endif %}
+        {% endfor %}
     </div>
     {% endif %}
 
@@ -266,22 +208,15 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 $(document).ready(function() {
-    var fetchForms = [
-        ['#shopifyForm', '/shopify/fetch_orders', '#shopifyResult'],
-        ['#shippoForm', '/shippo/fetch_orders', '#shippoResult'],
-        ['#shipstationForm', '/shipstation/fetch_orders', '#shipstationResult'],
-        ['#woocommerceForm', '/woocommerce/fetch_orders', '#woocommerceResult']
-    ];
-
-    fetchForms.forEach(function(entry) {
-        var selector = entry[0], url = entry[1], resultSelector = entry[2];
-        $(selector).submit(function(e) {
-            e.preventDefault();
-            // Reload so the Recent Sales grid and the summary cards both reflect
-            // the import; the cards are rendered server-side.
-            submitFetchForm(this, url, resultSelector, function() {
-                setTimeout(function() { location.reload(); }, 1200);
-            });
+    // One handler for every card; the cards themselves come from the server's
+    // integration registry, so adding a marketplace needs no change here.
+    $('.integrationFetchForm').submit(function(e) {
+        e.preventDefault();
+        var $form = $(this);
+        // Reload so the Recent Sales grid and the summary cards both reflect
+        // the import; the cards are rendered server-side.
+        submitFetchForm(this, $form.data('url'), $form.data('result'), function() {
+            setTimeout(function() { location.reload(); }, 1200);
         });
     });
 });

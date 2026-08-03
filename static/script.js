@@ -50,7 +50,7 @@ function showFlashMessage(message, category, details) {
 /* Every banner goes stale and clears itself after 30 seconds, whatever its
  * category — long enough to read a list of failed orders, short enough that a
  * stale message never sits over the page. Dismissing early still works. */
-var FLASH_TIMEOUT_MS = 30000;
+var FLASH_TIMEOUT_MS = 60000;
 
 function dismissFlashAfter(flashContainer, delay) {
     setTimeout(function () {

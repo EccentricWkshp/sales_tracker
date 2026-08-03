@@ -8,6 +8,10 @@
   Anyone who could view-source (or a cached page, or a shoulder-surfer) could
   read every integration credential. Fields render empty with a "saved" hint,
   and the server treats a blank submission as "leave unchanged".
+
+  Everything lives in one <form>. The OAuth buttons use formaction to post that
+  same form elsewhere, so a client ID typed just now is saved before the
+  operator is sent off to the marketplace to approve it.
 #}
 {% macro secret_field(id, name, label, saved, hint='', from_env=False) %}
 <div class="form-group">
@@ -27,6 +31,72 @@
 </div>
 {% endmacro %}
 
+{% macro enable_check(prefix, label, checked) %}
+<div class="form-group form-check">
+    <input type="checkbox" class="form-check-input" id="{{ prefix }}_enabled" name="{{ prefix }}_enabled"
+           {% if checked %}checked{% endif %}>
+    <label class="form-check-label" for="{{ prefix }}_enabled">{{ label }}</label>
+</div>
+{% endmacro %}
+
+{# The Connect / Disconnect / paste-a-code block every OAuth marketplace shares #}
+{% macro oauth_block(view) %}
+<fieldset>
+    <legend>Connection</legend>
+    <p class="form-hint">
+        Status:
+        {% if view.oauth.connected %}
+            <span class="badge badge-success">connected</span>
+            {% if view.oauth.expires_at %}
+                Access token valid until {{ view.oauth.expires_at.strftime('%Y-%m-%d %H:%M') }};
+                it is renewed automatically.
+            {% endif %}
+        {% else %}
+            <span class="badge badge-warning">not connected</span>
+            {{ view.label }} needs you to approve this app before orders can be read.
+        {% endif %}
+    </p>
+    <p class="form-hint">
+        Register this exact redirect URI with {{ view.label }}:<br>
+        <code>{{ view.oauth.redirect_uri }}</code>
+        {% if view.oauth.docs_url %}
+            &nbsp;<a href="{{ view.oauth.docs_url }}" target="_blank" rel="noopener">Setup guide</a>
+        {% endif %}
+    </p>
+
+    <div class="actions">
+        <button type="submit" class="btn btn-primary"
+                formaction="{{ url_for('integration_connect', key=view.key) }}">
+            <i class="fas fa-plug"></i>
+            {{ 'Reconnect' if view.oauth.connected else 'Save & Connect' }} {{ view.label }}
+        </button>
+        {% if view.oauth.connected %}
+            <button type="submit" class="btn btn-secondary"
+                    formaction="{{ url_for('integration_disconnect', key=view.key) }}"
+                    formnovalidate>
+                <i class="fas fa-unlink"></i> Disconnect
+            </button>
+        {% endif %}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ view.key }}_code">Authorization code (fallback)</label>
+        <input type="text" id="{{ view.key }}_code" name="code" class="form-control"
+               placeholder="Paste the code, or the whole redirected URL">
+        <p class="form-hint">
+            Only needed when {{ view.label }} cannot redirect back to this machine —
+            on a LAN-only box that is common. Approve in any browser, then paste the
+            <code>code=</code> value (or the entire address) here.
+        </p>
+        <button type="submit" class="btn btn-secondary"
+                formaction="{{ url_for('integration_paste_code', key=view.key) }}"
+                formnovalidate>
+            <i class="fas fa-paste"></i> Use pasted code
+        </button>
+    </div>
+</fieldset>
+{% endmacro %}
+
 {% block content %}
 <div class="page-header">
     <div>
@@ -35,159 +105,173 @@
     </div>
 </div>
 
-<form method="POST" enctype="multipart/form-data">
-    <div class="toolbar">
-        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Settings</button>
+<div class="tab-bar" role="tablist">
+    <button type="button" class="tab-btn" role="tab" data-tab="company"
+            id="tabbtn-company" aria-controls="tab-company" aria-selected="false">
+        <i class="fas fa-building"></i> Company
+    </button>
+    {% for view in integrations %}
+    <button type="button" class="tab-btn" role="tab" data-tab="{{ view.key }}"
+            id="tabbtn-{{ view.key }}" aria-controls="tab-{{ view.key }}" aria-selected="false">
+        {{ view.label }}
+        {% if view.enabled %}<span class="tab-dot" title="Enabled"></span>{% endif %}
+    </button>
+    {% endfor %}
+</div>
+
+<form method="POST" enctype="multipart/form-data" id="settingsForm">
+    <div class="tab-panel" id="tab-company" role="tabpanel" aria-labelledby="tabbtn-company" hidden>
+        <fieldset>
+            <legend>Company Information</legend>
+            <div class="form-group">
+                <label for="name">Company Name</label>
+                <input type="text" id="name" name="name" class="form-control" value="{{ company_info.name if company_info else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="address">Address</label>
+                <textarea id="address" name="address" rows="3" class="form-control">{{ company_info.address if company_info else '' }}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="phone">Phone</label>
+                <input type="tel" id="phone" name="phone" class="form-control" value="{{ company_info.phone if company_info else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" class="form-control" value="{{ company_info.email if company_info else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="logo">Logo</label>
+                <input type="file" id="logo" name="logo" class="form-control-file" accept=".png,.jpg,.jpeg,.gif">
+                {% if company_info and company_info.logo %}
+                    <img src="{{ company_info.logo }}" alt="Company Logo" style="max-width: 200px; margin-top: 10px; border-radius: var(--radius-sm);">
+                {% endif %}
+            </div>
+        </fieldset>
     </div>
 
-    <fieldset>
-        <legend>Company Information</legend>
-        <div class="form-group">
-            <label for="name">Company Name</label>
-            <input type="text" id="name" name="name" class="form-control" value="{{ company_info.name if company_info else '' }}">
-        </div>
-        <div class="form-group">
-            <label for="address">Address</label>
-            <textarea id="address" name="address" rows="3" class="form-control">{{ company_info.address if company_info else '' }}</textarea>
-        </div>
-        <div class="form-group">
-            <label for="phone">Phone</label>
-            <input type="tel" id="phone" name="phone" class="form-control" value="{{ company_info.phone if company_info else '' }}">
-        </div>
-        <div class="form-group">
-            <label for="email">Email</label>
-            <input type="email" id="email" name="email" class="form-control" value="{{ company_info.email if company_info else '' }}">
-        </div>
-        <div class="form-group">
-            <label for="logo">Logo</label>
-            <input type="file" id="logo" name="logo" class="form-control-file" accept=".png,.jpg,.jpeg,.gif">
-            {% if company_info and company_info.logo %}
-                <img src="{{ company_info.logo }}" alt="Company Logo" style="max-width: 200px; margin-top: 10px; border-radius: var(--radius-sm);">
+    {% for view in integrations %}
+    <div class="tab-panel" id="tab-{{ view.key }}" role="tabpanel" aria-labelledby="tabbtn-{{ view.key }}" hidden>
+        <fieldset>
+            <legend>{{ view.label }}</legend>
+            {% if view.blurb %}<p class="form-hint">{{ view.blurb }}</p>{% endif %}
+            {{ enable_check(view.prefix, 'Enable ' ~ view.label ~ ' integration', view.enabled) }}
+
+            {% if view.key == 'shopify' %}
+                {# Shopify carries two mutually exclusive credential pairs #}
+                <div class="form-group">
+                    <label for="shopify_shop_domain">Store Domain
+                        {% if view.from_env.shop_domain %}<span class="badge badge-success">from environment</span>{% endif %}
+                    </label>
+                    <input type="text" id="shopify_shop_domain" name="shopify_shop_domain" class="form-control"
+                           placeholder="your-store.myshopify.com"
+                           value="{{ view.field_values.shop_domain or '' }}">
+                    <p class="form-hint">
+                        The <code>.myshopify.com</code> host, not your customer-facing domain.
+                        {% if shopify_shop_domain %}Resolving to <code>{{ shopify_shop_domain }}</code>.{% endif %}
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label for="shopify_auth_mode">Authentication Route</label>
+                    <select id="shopify_auth_mode" name="shopify_auth_mode" class="form-control">
+                        <option value="token" {% if shopify_auth_mode == 'token' %}selected{% endif %}>
+                            Legacy custom app — Admin API access token
+                        </option>
+                        <option value="client_credentials" {% if shopify_auth_mode == 'client_credentials' %}selected{% endif %}>
+                            Dev Dashboard app — client ID and secret
+                        </option>
+                    </select>
+                    <p class="form-hint">
+                        Shopify offers both. The legacy route uses a long-lived
+                        <code>shpat_</code> token; the Dev Dashboard route exchanges a client ID
+                        and secret for a fresh 24-hour token automatically. Fill in only the
+                        pair for the route you pick.
+                    </p>
+                </div>
+
+                <div id="shopifyTokenFields">
+                    {{ secret_field('shopify_api_key', 'shopify_api_key', 'Admin API Access Token',
+                                    view.saved.api_key, 'From your custom app in Shopify admin — begins with shpat_.',
+                                    view.from_env.api_key) }}
+                    {{ secret_field('shopify_api_secret', 'shopify_api_secret', 'API Secret Key',
+                                    view.saved.api_secret, 'Only needed for webhooks — it signs every inbound request.',
+                                    view.from_env.api_secret) }}
+                </div>
+
+                <div id="shopifyClientFields">
+                    {{ secret_field('shopify_client_id', 'shopify_client_id', 'Client ID',
+                                    view.saved.client_id, 'From the app’s Dev Dashboard overview.',
+                                    view.from_env.client_id) }}
+                    {{ secret_field('shopify_client_secret', 'shopify_client_secret', 'Client Secret',
+                                    view.saved.client_secret,
+                                    'Exchanged for a 24-hour access token, and signs webhooks on this route.',
+                                    view.from_env.client_secret) }}
+                    <p class="form-hint">
+                        The app must be released <em>with</em> read_orders and installed on the
+                        store, or the token comes back with no scopes and every fetch is refused.
+                        {% if shopify_token_expires_at %}
+                            Current access token valid until {{ shopify_token_expires_at.strftime('%Y-%m-%d %H:%M') }}.
+                        {% else %}
+                            No access token cached yet — one is requested on the first fetch.
+                        {% endif %}
+                    </p>
+                </div>
+
+                <div class="form-group form-check">
+                    <input type="checkbox" class="form-check-input" id="shopify_webhooks_enabled" name="shopify_webhooks_enabled"
+                           {% if view.flags.webhooks_enabled %}checked{% endif %}>
+                    <label class="form-check-label" for="shopify_webhooks_enabled">Accept inbound webhooks</label>
+                </div>
+                <p class="form-hint">
+                    Webhook endpoint: <code>{{ webhook_url }}</code><br>
+                    Shopify must be able to reach this URL over HTTPS from the internet. While this
+                    box is only on the LAN, leave webhooks off and use the dashboard's date-range
+                    fetch instead. Requests without a valid signature are rejected, and the endpoint
+                    returns 404 entirely while this is unchecked.
+                </p>
+
+            {% else %}
+                {# Every other platform is a flat list of fields #}
+                {% for field in view.secret_fields %}
+                    {{ secret_field(view.prefix ~ '_' ~ field, view.prefix ~ '_' ~ field,
+                                    view.labels.get(field), view.saved.get(field),
+                                    view.hints.get(field), view.from_env.get(field)) }}
+                {% endfor %}
+                {% for field in view.plain_fields %}
+                <div class="form-group">
+                    <label for="{{ view.prefix }}_{{ field }}">{{ view.labels.get(field) }}
+                        {% if view.from_env.get(field) %}<span class="badge badge-success">from environment</span>{% endif %}
+                    </label>
+                    <input type="text" id="{{ view.prefix }}_{{ field }}" name="{{ view.prefix }}_{{ field }}"
+                           class="form-control" value="{{ view.field_values.get(field) or '' }}">
+                    {% if view.hints.get(field) %}
+                        <p class="form-hint">{{ view.hints.get(field) }}</p>
+                    {% elif view.key == 'etsy' and field == 'shop_id' %}
+                        <p class="form-hint">Leave blank — it is discovered from your account on the first fetch.</p>
+                    {% elif view.key == 'ebay' and field == 'ru_name' %}
+                        <p class="form-hint">eBay's RuName, not a URL. Found under your app's
+                           "User tokens" / redirect settings in the eBay developer portal.</p>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                {% for field in view.flags %}
+                <div class="form-group form-check">
+                    <input type="checkbox" class="form-check-input" id="{{ view.prefix }}_{{ field }}"
+                           name="{{ view.prefix }}_{{ field }}" {% if view.flags[field] %}checked{% endif %}>
+                    <label class="form-check-label" for="{{ view.prefix }}_{{ field }}">
+                        {{ view.labels.get(field) or field | replace('_', ' ') | title }}</label>
+                </div>
+                {% endfor %}
+                {% if not view.has_importer %}
+                <p class="form-hint">The {{ view.label }} importer has not been built yet — enabling this
+                   shows the dashboard card, but fetching reports that it is unavailable.</p>
+                {% endif %}
             {% endif %}
-        </div>
-    </fieldset>
+        </fieldset>
 
-    <fieldset>
-        <legend><i class="fab fa-shopify"></i> Shopify</legend>
-        <div class="form-group form-check">
-            <input type="checkbox" class="form-check-input" id="shopify_enabled" name="shopify_enabled"
-                   {% if shopify_credentials and shopify_credentials.enabled %}checked{% endif %}>
-            <label class="form-check-label" for="shopify_enabled">Enable Shopify integration</label>
-        </div>
-        <div class="form-group">
-            <label for="shopify_shop_domain">Store Domain
-                {% if shopify_from_env and shopify_from_env.shop_domain %}
-                    <span class="badge badge-success">from environment</span>
-                {% endif %}
-            </label>
-            <input type="text" id="shopify_shop_domain" name="shopify_shop_domain" class="form-control"
-                   placeholder="your-store.myshopify.com"
-                   value="{{ shopify_credentials.shop_domain if shopify_credentials else '' }}">
-            <p class="form-hint">
-                The <code>.myshopify.com</code> host, not your customer-facing domain.
-                {% if shopify_shop_domain %}Resolving to <code>{{ shopify_shop_domain }}</code>.{% endif %}
-            </p>
-        </div>
-
-        <div class="form-group">
-            <label for="shopify_auth_mode">Authentication Route</label>
-            <select id="shopify_auth_mode" name="shopify_auth_mode" class="form-control">
-                <option value="token" {% if shopify_auth_mode == 'token' %}selected{% endif %}>
-                    Legacy custom app — Admin API access token
-                </option>
-                <option value="client_credentials" {% if shopify_auth_mode == 'client_credentials' %}selected{% endif %}>
-                    Dev Dashboard app — client ID and secret
-                </option>
-            </select>
-            <p class="form-hint">
-                Shopify offers both. The legacy route uses a long-lived
-                <code>shpat_</code> token; the Dev Dashboard route exchanges a client ID
-                and secret for a fresh 24-hour token automatically. Fill in only the
-                pair for the route you pick.
-            </p>
-        </div>
-
-        <div id="shopifyTokenFields">
-            {{ secret_field('shopify_api_key', 'shopify_api_key', 'Admin API Access Token',
-                            shopify_credentials and shopify_credentials.api_key,
-                            'From your custom app in Shopify admin — begins with shpat_.',
-                            shopify_from_env and shopify_from_env.api_key) }}
-            {{ secret_field('shopify_api_secret', 'shopify_api_secret', 'API Secret Key',
-                            shopify_credentials and shopify_credentials.api_secret,
-                            'Only needed for webhooks — it signs every inbound request.',
-                            shopify_from_env and shopify_from_env.api_secret) }}
-        </div>
-
-        <div id="shopifyClientFields">
-            {{ secret_field('shopify_client_id', 'shopify_client_id', 'Client ID',
-                            shopify_credentials and shopify_credentials.client_id,
-                            'From the app’s Dev Dashboard overview.',
-                            shopify_from_env and shopify_from_env.client_id) }}
-            {{ secret_field('shopify_client_secret', 'shopify_client_secret', 'Client Secret',
-                            shopify_credentials and shopify_credentials.client_secret,
-                            'Exchanged for a 24-hour access token, and signs webhooks on this route.',
-                            shopify_from_env and shopify_from_env.client_secret) }}
-            <p class="form-hint">
-                {% if shopify_token_expires_at %}
-                    Current access token valid until {{ shopify_token_expires_at.strftime('%Y-%m-%d %H:%M') }};
-                    it is renewed automatically before it expires.
-                {% else %}
-                    No access token cached yet — one is requested on the first fetch.
-                {% endif %}
-            </p>
-        </div>
-        <div class="form-group form-check">
-            <input type="checkbox" class="form-check-input" id="shopify_webhooks_enabled" name="shopify_webhooks_enabled"
-                   {% if shopify_credentials and shopify_credentials.webhooks_enabled %}checked{% endif %}>
-            <label class="form-check-label" for="shopify_webhooks_enabled">Accept inbound webhooks</label>
-        </div>
-        <p class="form-hint">
-            Webhook endpoint: <code>{{ webhook_url }}</code><br>
-            Shopify must be able to reach this URL over HTTPS from the internet. While this
-            box is only on the LAN, leave webhooks off and use the dashboard's date-range
-            fetch instead. Requests without a valid signature are rejected, and the endpoint
-            returns 404 entirely while this is unchecked.
-        </p>
-    </fieldset>
-
-    <fieldset>
-        <legend>Shippo</legend>
-        <div class="form-group form-check">
-            <input type="checkbox" class="form-check-input" id="shippo_enabled" name="shippo_enabled"
-                   {% if shippo_credentials and shippo_credentials.enabled %}checked{% endif %}>
-            <label class="form-check-label" for="shippo_enabled">Enable Shippo integration</label>
-        </div>
-        {{ secret_field('shippo_api_key', 'shippo_api_key', 'API Key',
-                        shippo_credentials and shippo_credentials.api_key) }}
-    </fieldset>
-
-    <fieldset>
-        <legend>ShipStation</legend>
-        <div class="form-group form-check">
-            <input type="checkbox" class="form-check-input" id="ss_enabled" name="ss_enabled"
-                   {% if shipstation_credentials and shipstation_credentials.enabled %}checked{% endif %}>
-            <label class="form-check-label" for="ss_enabled">Enable ShipStation integration</label>
-        </div>
-        {{ secret_field('ss_api_key', 'ss_api_key', 'API Key',
-                        shipstation_credentials and shipstation_credentials.api_key) }}
-        {{ secret_field('ss_api_secret', 'ss_api_secret', 'API Secret',
-                        shipstation_credentials and shipstation_credentials.api_secret) }}
-    </fieldset>
-
-    <fieldset>
-        <legend>WooCommerce</legend>
-        <div class="form-group form-check">
-            <input type="checkbox" class="form-check-input" id="wc_enabled" name="wc_enabled"
-                   {% if woocommerce_credentials and woocommerce_credentials.enabled %}checked{% endif %}>
-            <label class="form-check-label" for="wc_enabled">Enable WooCommerce integration</label>
-        </div>
-        {{ secret_field('wc_api_key', 'wc_api_key', 'API Key',
-                        woocommerce_credentials and woocommerce_credentials.api_key) }}
-        {{ secret_field('wc_api_secret', 'wc_api_secret', 'API Secret',
-                        woocommerce_credentials and woocommerce_credentials.api_secret) }}
-        <p class="form-hint">The WooCommerce importer has not been built yet — enabling this
-           shows the dashboard card, but fetching reports that it is unavailable.</p>
-    </fieldset>
+        {% if view.oauth %}{{ oauth_block(view) }}{% endif %}
+    </div>
+    {% endfor %}
 
     <div class="actions">
         <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Settings</button>
@@ -197,16 +281,45 @@
 
 {% block extra_scripts %}
 <script>
-// Show only the credential pair the selected Shopify auth route actually uses.
-// Both stay in the DOM so switching back does not lose an unsaved entry.
 $(document).ready(function() {
+    // ---- Tabs. The active one is remembered across the save redirect, which
+    // posts and comes back to a bare /management with no hash of its own.
+    var STORAGE_KEY = 'managementTab';
+    var $buttons = $('.tab-btn');
+
+    function showTab(key) {
+        var matched = false;
+        $buttons.each(function() {
+            var isActive = $(this).data('tab') === key;
+            matched = matched || isActive;
+            $(this).attr('aria-selected', isActive ? 'true' : 'false');
+            $('#tab-' + $(this).data('tab')).prop('hidden', !isActive);
+        });
+        if (!matched) { return showTab($buttons.first().data('tab')); }
+        try { sessionStorage.setItem(STORAGE_KEY, key); } catch (e) { /* private mode */ }
+        if (history.replaceState) {
+            history.replaceState(null, '', '#' + key);
+        }
+    }
+
+    $buttons.click(function() { showTab($(this).data('tab')); });
+
+    var initial = (location.hash || '').replace('#', '')
+        || (function() { try { return sessionStorage.getItem(STORAGE_KEY); } catch (e) { return null; } })()
+        || 'company';
+    showTab(initial);
+
+    // ---- Show only the credential pair the selected Shopify auth route uses.
+    // Both stay in the DOM so switching back does not lose an unsaved entry.
     function syncShopifyAuthFields() {
         var mode = $('#shopify_auth_mode').val();
         $('#shopifyTokenFields').toggle(mode === 'token');
         $('#shopifyClientFields').toggle(mode === 'client_credentials');
     }
-    $('#shopify_auth_mode').change(syncShopifyAuthFields);
-    syncShopifyAuthFields();
+    if ($('#shopify_auth_mode').length) {
+        $('#shopify_auth_mode').change(syncShopifyAuthFields);
+        syncShopifyAuthFields();
+    }
 });
 </script>
 {% endblock %}
