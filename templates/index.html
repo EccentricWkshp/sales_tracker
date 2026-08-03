@@ -199,7 +199,7 @@ document.addEventListener('DOMContentLoaded', function() {
             String(d.getDate()).padStart(2, '0');
     }
 
-    ['shopify', 'shippo', 'ss', 'wc'].forEach(function(prefix) {
+    ['shopify', 'shippo', 'ss', 'wc', 'etsy', 'ebay'].forEach(function(prefix) {
         var start = document.getElementById(prefix + '_start_date');
         var end = document.getElementById(prefix + '_end_date');
         if (start) start.value = isoDate(priorDate);
