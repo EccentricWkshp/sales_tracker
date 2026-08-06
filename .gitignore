@@ -3,6 +3,11 @@ ag-grid.html
 old_*.*
 *copy*
 
+# pytest (the tests/ directory itself IS version controlled)
+.pytest_cache/
+htmlcov/
+.coverage
+
 # Database, JSON, and Misc File Types
 *.7z
 *.db

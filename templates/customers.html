@@ -5,7 +5,6 @@
 
 {% block content %}
 <h1>Customers</h1>
-<div id="deleteResult" class="mt-3"></div>
 <button id="addCustomerBtn" class="btn btn-primary"><i class="fas fa-plus"></i> Add Customer</button>
 <button id="mergeCustomersBtn" class="btn btn-primary" disabled><i class="fas fa-object-group"></i> Merge Selected</button>
 <div id="customersGrid" class="ag-theme-alpine" style="height: 600px; width: 100%;"></div>
@@ -91,7 +90,12 @@ var gridOptions = {
                     deleteCustomer(params.data.id);
                 }
             },
-            width: 40,
+            // maxWidth, not width: defaultColDef sets minWidth 100, which
+            // clamps a plain width up to 100. It used to look right only because
+            // fitCellContents ran against embedded rows at creation and squeezed
+            // it back down — an API-loaded grid starts empty with nothing to
+            // measure. Every other grid in the app uses maxWidth here.
+            maxWidth: 40,
             sortable: false,
             filter: false,
             resizable: false,
@@ -107,7 +111,12 @@ var gridOptions = {
             onCellClicked: function(params) {
                 editCustomer(params.data.id);
             },
-            width: 40,
+            // maxWidth, not width: defaultColDef sets minWidth 100, which
+            // clamps a plain width up to 100. It used to look right only because
+            // fitCellContents ran against embedded rows at creation and squeezed
+            // it back down — an API-loaded grid starts empty with nothing to
+            // measure. Every other grid in the app uses maxWidth here.
+            maxWidth: 40,
             sortable: false,
             filter: false,
             resizable: false,
@@ -123,7 +132,12 @@ var gridOptions = {
             onCellClicked: function(params) {
                 viewCustomer(params.data.id);
             },
-            width: 40,
+            // maxWidth, not width: defaultColDef sets minWidth 100, which
+            // clamps a plain width up to 100. It used to look right only because
+            // fitCellContents ran against embedded rows at creation and squeezed
+            // it back down — an API-loaded grid starts empty with nothing to
+            // measure. Every other grid in the app uses maxWidth here.
+            maxWidth: 40,
             sortable: false,
             filter: false,
             resizable: false,
@@ -133,21 +147,13 @@ var gridOptions = {
         { headerName: 'Name', field: 'name', sortable: true, sort: 'asc', filter: true },
         { headerName: 'Company', field: 'company', sortable: true, filter: true, valueFormatter: params => params.value ? params.value : '' },
         { headerName: 'Email', field: 'email', sortable: true, filter: true, valueFormatter: emailValueFormatter },
-        { headerName: 'Billing Address', field: 'billing_address', sortable: true, filter: true, suppressSizeToFit: true },
-        { headerName: 'Shipping Address', field: 'shipping_address', sortable: true, filter: true, suppressSizeToFit: true }
+        { headerName: 'Billing Address', field: 'billing_address', sortable: true, filter: true, suppressSizeToFit: true, valueFormatter: oneLine },
+        { headerName: 'Shipping Address', field: 'shipping_address', sortable: true, filter: true, suppressSizeToFit: true, valueFormatter: oneLine }
     ],
-    rowData: [
-        {% for customer in customers %}
-        {
-            id: {{ customer.id }},
-            name: '{{ customer.name|cleaned }}',
-            company: '{{ customer.company|cleaned }}',
-            email: '{{ customer.email }}',
-            billing_address: '{{ customer.billing_address.replace('\n', ' ')|cleaned }}',
-            shipping_address: '{{ customer.shipping_address.replace('\n', ' ')|cleaned }}'
-        },
-        {% endfor %}
-    ],
+    // Rows come from /api/customers, not from Jinja. Embedding them meant the
+    // grid could only ever show the page's original data, so every edit, merge
+    // or delete had to reload the whole page to look right.
+    rowData: [],
     defaultColDef: {
         minWidth: 100,
         resizable: true,
@@ -159,40 +165,38 @@ var gridOptions = {
     }
 };
 
+// Addresses are stored multi-line; the grid is one row per customer
+function oneLine(params) {
+    return params.value ? String(params.value).split('\n').join(', ') : '';
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     var gridDiv = document.querySelector('#customersGrid');
     gridApi = agGrid.createGrid(gridDiv, gridOptions);
+    refreshGrid('/api/customers', gridApi);
 });
 
 function deleteCustomer(customerId) {
     $.ajax({
         url: "/customers/delete/" + customerId,
         method: "POST",
-            success: function(response) {
-                if (response.success) {
-                    // $('#deleteResult').html('<div class="alert alert-success">' + response.success + '</div>');
-                    // Wait for a few seconds before reloading the page
-                    setTimeout(function() {
-                        //location.reload();
-                        refreshGrid('/api/customers', gridApi);
-                        $('#deleteResult').html('');
-                    }, 1500); // 3000 milliseconds = 3 seconds
-                    showFlashMessage(response.message, response.category);
-                } else {
-                    showFlashMessage(response.message || "Error deleting customer", response.category || 'error');
-                }
-            },
-            error: function(xhr) {
-                var errorMessage = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'An error occurred while deleting the customer';
-                showFlashMessage(errorMessage, 'error');
-
-                //$('#deleteResult').html('<div class="alert alert-danger">' + errorMessage + '</div>');
-                setTimeout(function() {
-                    //location.reload();
-                    refreshGrid('/api/customers', gridApi);
-                    $('#deleteResult').html('');
-                }, 1500); // 3000 milliseconds = 3 seconds
+        success: function(response) {
+            if (response.success) {
+                // Refresh immediately. The old setTimeout(1500) was there to let
+                // a since-removed inline banner be read before the page reloaded;
+                // showFlashMessage does not need the grid to wait for it.
+                refreshGrid('/api/customers', gridApi);
+                showFlashMessage(response.message, response.category || 'success');
+            } else {
+                showFlashMessage(response.message || 'Could not delete that customer.',
+                                 response.category || 'error');
             }
+        },
+        error: function(xhr) {
+            // A customer with sales cannot be deleted — say so, and leave the
+            // grid alone, because nothing changed
+            showFlashMessage(serverMessage(xhr, 'Could not delete that customer.'), 'error');
+        }
     });
 }
 
@@ -260,13 +264,15 @@ function mergeCustomers(customerId1, customerId2) {
         }),
         contentType: "application/json",
         success: function(response) {
-            alert(response.message);
+            // The message names any address that could not be carried over, so
+            // it has to be readable rather than dismissed out of an alert box
+            showFlashMessage(response.message, response.success ? 'success' : 'error');
             if (response.success) {
                 refreshGrid('/api/customers', gridApi);
             }
         },
         error: function(xhr) {
-            alert("Error merging customers: " + xhr.responseJSON.message);
+            showFlashMessage(serverMessage(xhr, 'Could not merge those customers.'), 'error');
         }
     });
 }
@@ -313,18 +319,17 @@ $(document).ready(function() {
             success: function(response) {
                 if (response.success) {
                     modal.hide();
-                    //location.reload();
                     refreshGrid('/api/customers', gridApi);
-                    showFlashMessage(response.message, response.category);
+                    showFlashMessage(response.message, response.category || 'success');
                 } else {
-                    showFlashMessage(response.message || "Error saving customer", response.category || 'error');
-                    // alert("Error saving customer");
+                    showFlashMessage(response.message || 'Could not save that customer.',
+                                     response.category || 'error');
                 }
             },
             error: function(xhr) {
-                var errorMessage = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : 'An error occurred while saving the customer';
-                showFlashMessage(errorMessage, 'error');
-                // alert("Error saving customer: " + errorMessage);
+                // The modal stays open on a validation failure so the operator
+                // can correct the field rather than retyping the whole form
+                showFlashMessage(serverMessage(xhr, 'Could not save that customer.'), 'error');
             }
         });
     });

@@ -426,9 +426,14 @@ class SalesReceipt(db.Model):
     tracking = db.Column(db.String(50))
     shipdate = db.Column(db.Date)
     date = db.Column(db.DateTime, nullable=False, default=db.func.current_timestamp())
-    total = db.Column(db.Float, nullable=False)
-    tax = db.Column(db.Float, nullable=False)
-    shipping = db.Column(db.Float, nullable=False)
+    # Money is Numeric, not Float. These figures feed the WA B&O return, and
+    # binary floats cannot hold 0.10 exactly: a Float column turned
+    # 19.99 + 5.00 + 1.90 into 26.889999999999997, which then rounded to a
+    # different cent depending on where it was added up. See
+    # migrations/money_columns_to_numeric.py.
+    total = db.Column(db.Numeric(10, 2), nullable=False)
+    tax = db.Column(db.Numeric(10, 2), nullable=False)
+    shipping = db.Column(db.Numeric(10, 2), nullable=False)
     line_items = db.relationship('LineItem', backref='sales_receipt', lazy=True)
     customer_notes = db.Column(db.String(500)) # Notes visible to customer
     internal_notes = db.Column(db.String(500)) # Internal notes
@@ -446,9 +451,12 @@ class SalesReceipt(db.Model):
             'tracking': self.tracking if self.tracking else None,
             'shipdate': self.shipdate.strftime('%m-%d-%Y') if self.shipdate else None,
             'date': self.date.strftime('%m-%d-%Y'),
-            'total': self.total,
-            'tax': self.tax,
-            'shipping': self.shipping,
+            # float, not Decimal: Decimal is not JSON serialisable, and the grid
+            # needs a number rather than a string so agNumberColumnFilter and
+            # sorting compare numerically ('9.00' used to sort above '10.00')
+            'total': float(self.total),
+            'tax': float(self.tax),
+            'shipping': float(self.shipping),
             'line_items': [item.to_dict() for item in self.line_items],
             'customer_notes': self.customer_notes,
             'internal_notes': self.internal_notes
@@ -459,8 +467,11 @@ class LineItem(db.Model):
     receipt_id = db.Column(db.Integer, db.ForeignKey('sales_receipt.id'), nullable=False)
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'), nullable=False)
     quantity = db.Column(db.Integer, nullable=False)
-    price_each = db.Column(db.Float, nullable=False)
-    total_price = db.Column(db.Float, nullable=False)
+    # Numeric for the same reason as SalesReceipt's totals: the state taxes
+    # report sums total_price across a whole quarter, and float error compounds
+    # over hundreds of rows.
+    price_each = db.Column(db.Numeric(10, 2), nullable=False)
+    total_price = db.Column(db.Numeric(10, 2), nullable=False)
     product = db.relationship('Product')
 
     def to_dict(self):
@@ -469,8 +480,8 @@ class LineItem(db.Model):
             'receipt_id': self.receipt_id,
             'product_id': self.product_id,
             'quantity': self.quantity,
-            'price_each': self.price_each,
-            'total_price': self.total_price,
+            'price_each': float(self.price_each),
+            'total_price': float(self.total_price),
             'product': self.product.to_dict() if self.product else None
         }
 
@@ -649,7 +660,10 @@ class BankTransaction(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     date = db.Column(db.Date, nullable=False)
     description = db.Column(db.String(200), nullable=False)
-    amount = db.Column(db.Float, nullable=False)
+    # Numeric so is_duplicate_transaction can compare amounts exactly — two
+    # floats that both display as 26.89 are not necessarily equal, which let
+    # genuine duplicates through and flagged distinct charges as dupes.
+    amount = db.Column(db.Numeric(10, 2), nullable=False)
     credit_debit = db.Column(db.String(10))  # 'Credit' or 'Debit'
     transaction_type = db.Column(db.String(50))  # 'ACH Credit', 'POS', 'ACH Debit', etc.
     category = db.Column(db.String(100))
@@ -720,16 +734,14 @@ def index():
     total_revenue = db.session.query(func.sum(SalesReceipt.total)).scalar() or 0
     total_sales = SalesReceipt.query.count()
     total_customers = Customer.query.count()
-    recent_sales = SalesReceipt.query.options(joinedload(SalesReceipt.customer)) \
-        .order_by(SalesReceipt.date.desc()).limit(10).all()
     company_info = CompanyInfo.get_info()
 
+    # Recent Sales loads from /api/sales?limit=10, so no rows are passed here
     return render_template('index.html',
                            pending_order_count=PendingOrder.query.count(),
                            total_revenue=total_revenue,
                            total_sales=total_sales,
                            total_customers=total_customers,
-                           recent_sales=recent_sales,
                            company_info=company_info,
                            enabled_integrations=enabled_integration_cards())
 
@@ -1088,10 +1100,8 @@ def get_state_taxes_data():
 @app.route('/customers')
 @login_required
 def customers():
-    customers = Customer.query.all()
-    company_info = CompanyInfo.get_info()
-
-    return render_template('customers.html', customers=customers, company_info=company_info)
+    # The grid loads its rows from /api/customers; nothing is embedded in the page
+    return render_template('customers.html', company_info=CompanyInfo.get_info())
 
 def _placeholder_email():
     """Customer.email is unique and NOT NULL, so customers without a real address
@@ -1251,10 +1261,9 @@ def merge_customers_route():
 @app.route('/api/customers')
 @login_required
 def get_customers():
-    customers = Customer.query.all()
-    customers_dict = [customer.to_dict() for customer in customers]
-
-    return jsonify(customers_dict)
+    """Every customer, by name. Backs the customers grid."""
+    customers = Customer.query.order_by(func.lower(Customer.name)).all()
+    return jsonify([customer.to_dict() for customer in customers])
 
 @app.route('/api/customer_orders/<int:id>')
 @login_required
@@ -1910,12 +1919,27 @@ def print_sale(id):
 @app.route('/api/sales')
 @login_required
 def get_SalesReceipt():
-    """All receipts, newest first. Backs the sales grid and banking.html."""
-    sales = (SalesReceipt.query
+    """Receipts, newest first. Backs the sales grid, banking.html and the
+    dashboard's Recent Sales card.
+
+    `?limit=N` is for that last one: to_dict() walks the customer and every line
+    item, so serialising all ~1,000 receipts to fill a ten-row card would be a
+    lot of work to throw away.
+    """
+    try:
+        limit = int(request.args.get('limit') or 0)
+    except ValueError:
+        return jsonify({'error': 'limit must be a whole number'}), 400
+    if limit < 0:
+        return jsonify({'error': 'limit cannot be negative'}), 400
+
+    query = (SalesReceipt.query
              .options(joinedload(SalesReceipt.customer),
                       joinedload(SalesReceipt.line_items).joinedload(LineItem.product))
-             .order_by(SalesReceipt.date.desc()).all())
-    return jsonify([sale.to_dict() for sale in sales])
+             .order_by(SalesReceipt.date.desc()))
+    if limit:
+        query = query.limit(limit)
+    return jsonify([sale.to_dict() for sale in query.all()])
 
 def require_integration(model, label):
     """Return (credentials, None) when an integration is usable, else (None, response)."""
@@ -3828,8 +3852,11 @@ def upload_transactions():
                     continue
                     
                 try:
-                    amount = float(amount_str.strip().replace('$', '').replace(',', ''))
-                except ValueError:
+                    # Decimal, not float: the column is Numeric and
+                    # is_duplicate_transaction compares amounts with ==, which
+                    # only means anything if both sides are exact.
+                    amount = Decimal(amount_str.strip().replace('$', '').replace(',', ''))
+                except InvalidOperation:
                     continue
 
                 transaction = BankTransaction(
@@ -4441,8 +4468,10 @@ def replace_line_items(sale, imported_items):
             receipt_id=sale.id,
             product_id=product.id,
             quantity=quantity,
-            price_each=float(price_each),
-            total_price=float(price_each * quantity)
+            # Stored as Decimal. These used to be cast to float on the way in,
+            # which reintroduced the error the Numeric columns exist to avoid.
+            price_each=price_each,
+            total_price=price_each * quantity
         ))
     db.session.flush()
 

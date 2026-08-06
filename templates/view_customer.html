@@ -8,20 +8,20 @@
 <div class="customer-details-container">
     <div class="customer-info-pane">
         <h2>Customer Info</h2>
-        <p><strong>Name:</strong> {{ customer.name }}</p>
-        <p><strong>Email:</strong> {% if not customer.email.startswith('placeholder_') %} <a href="mailto: {{ customer.email }}">{{ customer.email }}</a> {% endif %}</p>
-        <p><strong>Secondary Email:</strong> {% if customer.email_2 and not customer.email_2.startswith('placeholder_') %} <a href="mailto: {{ customer.email_2 }}">{{ customer.email_2 }}</a> {% endif %}</p>
-        <p><strong>Company:</strong> {{ customer.company or 'N/A' }}</p>
-        <p><strong>Phone:</strong> {{ customer.phone or 'N/A' }}</p>
+        <p><strong>Name:</strong> <span id="detailName">{{ customer.name }}</span></p>
+        <p><strong>Email:</strong> <span id="detailEmail">{% if not customer.email.startswith('placeholder_') %}<a href="mailto:{{ customer.email }}">{{ customer.email }}</a>{% endif %}</span></p>
+        <p><strong>Secondary Email:</strong> <span id="detailEmail2">{% if customer.email_2 and not customer.email_2.startswith('placeholder_') %}<a href="mailto:{{ customer.email_2 }}">{{ customer.email_2 }}</a>{% endif %}</span></p>
+        <p><strong>Company:</strong> <span id="detailCompany">{{ customer.company or 'N/A' }}</span></p>
+        <p><strong>Phone:</strong> <span id="detailPhone">{{ customer.phone or 'N/A' }}</span></p>
     </div>
 
     <div class="address-pane">
         <h2>Billing Address</h2>
-        <p><a href="https://www.google.com/maps/search/?api=1&amp;query={{ customer.billing_address | maps_query }}" target="_blank" rel="noopener">{{ customer.billing_address | nl2br }}</a></p>
+        <p><a id="detailBillingLink" href="https://www.google.com/maps/search/?api=1&amp;query={{ customer.billing_address | maps_query }}" target="_blank" rel="noopener">{{ customer.billing_address | nl2br }}</a></p>
     </div>
     <div class="address-pane">
         <h2>Shipping Address</h2>
-        <p><a href="https://www.google.com/maps/search/?api=1&amp;query={{ customer.shipping_address | maps_query }}" target="_blank" rel="noopener">{{ customer.shipping_address | nl2br }}</a></p>
+        <p><a id="detailShippingLink" href="https://www.google.com/maps/search/?api=1&amp;query={{ customer.shipping_address | maps_query }}" target="_blank" rel="noopener">{{ customer.shipping_address | nl2br }}</a></p>
     </div>
 </div>
 
@@ -212,6 +212,52 @@ function editCustomer(customerId) {
     });
 }
 
+// Repaint the detail panes from the server's copy of the record.
+//
+// Everything below goes in via textContent or a constructed node, never
+// innerHTML: these are operator- and import-supplied strings, and this page
+// already had to be fixed once for rendering an address as raw markup.
+function applyCustomerDetails() {
+    $.get("/customers/get/{{ customer.id }}", function (data) {
+        function setText(id, value) {
+            document.getElementById(id).textContent = value || 'N/A';
+        }
+        setText('detailName', data.name);
+        setText('detailCompany', data.company);
+        setText('detailPhone', data.phone);
+
+        function setEmail(id, address) {
+            var span = document.getElementById(id);
+            span.textContent = '';
+            if (!address || address.indexOf('placeholder_') === 0) return;
+            var link = document.createElement('a');
+            link.href = 'mailto:' + address;
+            link.textContent = address;
+            span.appendChild(link);
+        }
+        setEmail('detailEmail', data.email);
+        setEmail('detailEmail2', data.email_2);
+
+        function setAddress(id, address) {
+            var link = document.getElementById(id);
+            link.href = 'https://www.google.com/maps/search/?api=1&query=' +
+                encodeURIComponent(String(address || '').split(/\s+/).join(' ').trim());
+            link.textContent = '';
+            String(address || '').split('\n').forEach(function (line, index) {
+                if (index) link.appendChild(document.createElement('br'));
+                link.appendChild(document.createTextNode(line));
+            });
+        }
+        setAddress('detailBillingLink', data.billing_address);
+        setAddress('detailShippingLink', data.shipping_address);
+
+        document.title = 'View Customer - ' + (data.name || '');
+    }).fail(function () {
+        showFlashMessage('Saved, but the page could not be refreshed — reload to '
+                         + 'see the current details.', 'warning');
+    });
+}
+
 $(document).ready(function() {
     var modal = $("#customerModal");
     var closeBtn = $(".close");
@@ -251,12 +297,17 @@ $(document).ready(function() {
             contentType: "application/json",
             success: function(response) {
                 modal.hide();
-                location.reload();
+                // Repaint the panes from what was saved instead of reloading the
+                // page. A reload also rebuilt the orders grid and threw away any
+                // sort or filter applied to it.
+                applyCustomerDetails();
+                showFlashMessage(response.message || 'Customer updated.',
+                                 response.category || 'success');
             },
-            // Validation failures (missing name, duplicate email) return 4xx â€”
+            // Validation failures (missing name, duplicate email) return 4xx —
             // without this the modal simply did nothing and looked broken
             error: function(xhr) {
-                showFlashMessage(serverMessage(xhr, 'Error saving customer'), 'error');
+                showFlashMessage(serverMessage(xhr, 'Could not save that customer.'), 'error');
             }
         });
     });

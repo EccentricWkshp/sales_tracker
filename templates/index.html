@@ -108,63 +108,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 headerName: "Date",
                 field: "date",
                 filter: 'agDateColumnFilter',
-                filterParams: {
-                    comparator: function(filterLocalDateAtMidnight, cellValue) {
-                        var dateParts = cellValue.split('-');
-                        var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
-
-                        if (cellDate < filterLocalDateAtMidnight) {
-                            return -1;
-                        } else if (cellDate > filterLocalDateAtMidnight) {
-                            return 1;
-                        } else {
-                            return 0;
-                        }
-                    }
-                },
-                valueFormatter: function(params) {
-                    var dateParts = params.value.split('-');
-                    return `${dateParts[0]}-${dateParts[1]}-${dateParts[2]}`;
-                }
+                filterParams: { comparator: mmddyyyyFilterComparator }
             },
             {
                 headerName: "Ship Date",
                 field: "shipdate",
                 filter: 'agDateColumnFilter',
-                filterParams: {
-                    comparator: function(filterLocalDateAtMidnight, cellValue) {
-                        var dateParts = cellValue.split('-');
-                        var cellDate = new Date(Number(dateParts[2]), Number(dateParts[0]) - 1, Number(dateParts[1]));
-
-                        if (cellDate < filterLocalDateAtMidnight) {
-                            return -1;
-                        } else if (cellDate > filterLocalDateAtMidnight) {
-                            return 1;
-                        } else {
-                            return 0;
-                        }
-                    }
-                }
+                filterParams: { comparator: mmddyyyyFilterComparator }
             },
             { headerName: 'Order #', field: 'external_order_number', sortable: true, filter: true, flex: 1 },
             { headerName: 'Receipt #', field: 'receipt_number', sortable: true, filter: true, flex: 1 },
-            { headerName: 'Customer', field: 'customer', sortable: true, filter: true, flex: 2 },
+            { headerName: 'Customer', field: 'customer_name', sortable: true, filter: true, flex: 2 },
             { headerName: 'Total', field: 'total', valueFormatter: currencyFormatter, type: 'rightAligned',
               sortable: true, filter: 'agNumberColumnFilter', comparator: greaterlessComparator, flex: 1 },
         ],
-        rowData: [
-            {% for sale in recent_sales %}
-            {
-                id: {{ sale.id }},
-                date: '{{ sale.date.strftime('%m-%d-%Y') }}',
-                shipdate: '{{ sale.shipdate.strftime('%m-%d-%Y') if sale.shipdate else '' }}',
-                receipt_number: '{{ sale.receipt_number|cleaned }}',
-                external_order_number: '{{ sale.external_order_number|cleaned }}',
-                customer: '{{ sale.customer.name|cleaned }}',
-                total: {{ "%.2f"|format(sale.total) }}
-            },
-            {% endfor %}
-        ],
+        // Loaded from /api/sales below rather than embedded from Jinja, so this
+        // card shows the same rows the sales page does, from one serialiser.
+        rowData: [],
         defaultColDef: {
             flex: 1,
             minWidth: 100,
@@ -184,8 +144,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     var gridDiv = document.querySelector('#recentSalesGrid');
     if (gridDiv && !gridDiv.gridInitialized) {
-        agGrid.createGrid(gridDiv, gridOptions);
+        var recentSalesApi = agGrid.createGrid(gridDiv, gridOptions);
         gridDiv.gridInitialized = true;
+        // Ten rows is all this card shows, and /api/sales is already ordered
+        // newest first, so ask for ten rather than serialising every receipt
+        refreshGrid('/api/sales?limit=10', recentSalesApi);
     }
 
     // Default every fetch form to the last 7 days, through end of today

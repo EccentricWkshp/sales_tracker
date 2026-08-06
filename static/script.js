@@ -44,13 +44,31 @@ function showFlashMessage(message, category, details) {
     flashContainer.appendChild(flashItem);
     document.body.insertBefore(flashContainer, document.body.firstChild);
 
-    dismissFlashAfter(flashContainer);
+    dismissFlashAfter(flashContainer,
+                      flashTimeoutFor(category, !!(details && details.length)));
 }
 
-/* Every banner goes stale and clears itself after 30 seconds, whatever its
- * category — long enough to read a list of failed orders, short enough that a
- * stale message never sits over the page. Dismissing early still works. */
-var FLASH_TIMEOUT_MS = 60000;
+/* How long a banner sits before fading itself out. Dismissing early still works.
+ *
+ * The banner is position:fixed across the top, over the header, so a stale one
+ * is genuinely in the way — these are short. banking.html's showAlert() clears
+ * after 5s and is the reference point.
+ *
+ * Tiered because the banners do not all carry the same weight:
+ *   success/info   a confirmation of something the operator just did
+ *   error/warning  something they may still need to act on
+ *   with details   an import naming which individual orders failed, which takes
+ *                  real time to read
+ */
+var FLASH_TIMEOUT_MS = 6000;
+var FLASH_TIMEOUT_IMPORTANT_MS = 15000;
+var FLASH_TIMEOUT_DETAILED_MS = 30000;
+
+function flashTimeoutFor(category, hasDetails) {
+    if (hasDetails) return FLASH_TIMEOUT_DETAILED_MS;
+    if (category === 'error' || category === 'warning') return FLASH_TIMEOUT_IMPORTANT_MS;
+    return FLASH_TIMEOUT_MS;
+}
 
 function dismissFlashAfter(flashContainer, delay) {
     setTimeout(function () {
@@ -62,13 +80,30 @@ function dismissFlashAfter(flashContainer, delay) {
     }, delay || FLASH_TIMEOUT_MS);
 }
 
-/* Server-rendered flashes (base.html) are in the DOM before this runs, so they
- * need the same treatment as the ones showFlashMessage creates. */
-document.addEventListener('DOMContentLoaded', function () {
+/* Server-rendered flashes (base.html, login.html) are already in the DOM, so
+ * they need the same treatment as the ones showFlashMessage builds. The category
+ * has to be read back off the class, since there is no JS call to carry it. */
+function initServerFlashes() {
     document.querySelectorAll('.flash-messages').forEach(function (container) {
-        dismissFlashAfter(container);
+        var delay = FLASH_TIMEOUT_MS;
+        container.querySelectorAll('.flash-message').forEach(function (item) {
+            var category = item.classList.contains('flash-error') ? 'error'
+                         : item.classList.contains('flash-warning') ? 'warning'
+                         : 'info';
+            // One container can hold several messages; the slowest one wins
+            delay = Math.max(delay, flashTimeoutFor(category, !!item.querySelector('ul')));
+        });
+        dismissFlashAfter(container, delay);
     });
-});
+}
+
+// login.html loads this at the end of its body, where DOMContentLoaded may
+// already have fired — registering a listener then would never run.
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initServerFlashes);
+} else {
+    initServerFlashes();
+}
 
 /* Pull the most useful message out of a failed jQuery AJAX response. Routes
  * return either {error: ...} or {message: ...} depending on their age. */
@@ -129,6 +164,22 @@ function dateComparator(date1, date2) {
 
     if (d1 < d2) return -1;
     if (d1 > d2) return 1;
+    return 0;
+}
+
+/**
+ * agDateColumnFilter comparator for the MM-DD-YYYY strings the API emits.
+ *
+ * Null-safe: an unshipped sale has shipdate null, and the per-grid copies of
+ * this used to call .split() on it and throw, which silently killed the filter.
+ */
+function mmddyyyyFilterComparator(filterLocalDateAtMidnight, cellValue) {
+    if (!cellValue) return -1;
+    var parts = String(cellValue).split('-');
+    if (parts.length !== 3) return -1;
+    var cellDate = new Date(Number(parts[2]), Number(parts[0]) - 1, Number(parts[1]));
+    if (cellDate < filterLocalDateAtMidnight) return -1;
+    if (cellDate > filterLocalDateAtMidnight) return 1;
     return 0;
 }
 
